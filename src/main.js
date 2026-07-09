@@ -272,8 +272,12 @@ function buildClaw() {
   const group = sceneObjects.claw;
   sceneObjects.machine.add(group);
 
-  const hub = addBox(group, [0.62, 0.38, 0.62], [0, 0, 0], mats.clawBody, true);
+  const hub = addBox(group, [0.58, 0.36, 0.58], [0, 0, 0], mats.clawBody, true);
   hub.name = "claw-hub";
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.22, 24), mats.rail);
+  collar.position.y = 0.27;
+  collar.castShadow = true;
+  group.add(collar);
 
   sceneObjects.cable = new THREE.Mesh(
     new THREE.CylinderGeometry(0.035, 0.035, 1, 12),
@@ -287,23 +291,37 @@ function buildClaw() {
     const angle = i * (Math.PI * 2 / 3) + Math.PI / 6;
     finger.userData.baseAngle = angle;
 
-    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.68, 8, 12), mats.clawMetal);
-    upper.rotation.x = 0.5;
-    upper.position.set(0, -0.45, 0.18);
-    upper.castShadow = true;
-    finger.add(upper);
-
-    const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.36, 8, 12), mats.clawMetal);
-    tip.rotation.x = -0.5;
-    tip.position.set(0, -0.9, 0.32);
-    tip.castShadow = true;
-    finger.add(tip);
+    addRod(finger, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.34, -0.62, 0), 0.045, mats.clawMetal);
+    addRod(finger, new THREE.Vector3(0.34, -0.62, 0), new THREE.Vector3(0.16, -1.08, 0), 0.045, mats.clawMetal);
+    addRod(finger, new THREE.Vector3(0.16, -1.08, 0), new THREE.Vector3(-0.04, -1.18, 0), 0.04, mats.clawMetal);
+    addJoint(finger, 0, 0, 0, 0.07);
+    addJoint(finger, 0.34, -0.62, 0, 0.065);
 
     finger.rotation.y = angle;
-    finger.position.set(Math.cos(angle) * 0.18, -0.12, Math.sin(angle) * 0.18);
+    finger.position.set(Math.cos(angle) * 0.2, -0.16, Math.sin(angle) * 0.2);
     group.add(finger);
     sceneObjects.fingers.push(finger);
   }
+}
+
+function addRod(parent, start, end, radius, material) {
+  const direction = new THREE.Vector3().subVectors(end, start);
+  const length = direction.length();
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 14), material);
+  mesh.position.copy(start).addScaledVector(direction, 0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+function addJoint(parent, x, y, z, radius) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), mats.rail);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  parent.add(mesh);
+  return mesh;
 }
 
 function buildPrizePlaceholders() {
@@ -321,13 +339,8 @@ function buildPrizePlaceholders() {
   ];
 
   positions.forEach((pos, index) => {
-    const color = [0xff9f43, 0x55efc4, 0x73d2ff, 0xff5f7e, 0xd5a7ff, 0xffd776][index % 6];
-    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.58, metalness: 0.02 });
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.36, 24, 18), material);
-    mesh.scale.set(0.9, 1.08, 0.86);
-    mesh.position.set(pos[0], 0.42, pos[2]);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    const mesh = createPlushPlaceholder(index);
+    mesh.position.set(pos[0], 0, pos[2]);
     sceneObjects.machine.add(mesh);
 
     sceneObjects.prizes.push({
@@ -342,11 +355,40 @@ function buildPrizePlaceholders() {
   });
 }
 
+function createPlushPlaceholder(index) {
+  const color = [0xff9f43, 0x55efc4, 0x73d2ff, 0xff5f7e, 0xd5a7ff, 0xffd776][index % 6];
+  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.02 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.7 });
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.48, 0.38), material);
+  body.position.y = 0.38;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.38, 0.38), material);
+  head.position.y = 0.76;
+  const earA = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.12), material);
+  earA.position.set(-0.18, 1.02, 0);
+  const earB = earA.clone();
+  earB.position.x = 0.18;
+  const eyeA = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.04, 0.02), dark);
+  eyeA.position.set(-0.09, 0.8, 0.2);
+  const eyeB = eyeA.clone();
+  eyeB.position.x = 0.09;
+  const footA = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.1, 0.22), material);
+  footA.position.set(-0.14, 0.08, 0.08);
+  const footB = footA.clone();
+  footB.position.x = 0.14;
+  [body, head, earA, earB, eyeA, eyeB, footA, footB].forEach((part) => {
+    part.castShadow = true;
+    part.receiveShadow = true;
+    group.add(part);
+  });
+  return group;
+}
+
 async function loadPrizeModels() {
-  const selected = sceneObjects.prizes.slice(0, PRIZE_ASSETS.length);
+  const selected = sceneObjects.prizes;
   await Promise.allSettled(
     selected.map(async (prize, index) => {
-      const gltf = await loader.loadAsync(PRIZE_ASSETS[index]);
+      const gltf = await loader.loadAsync(PRIZE_ASSETS[index % PRIZE_ASSETS.length]);
       const model = gltf.scene;
       normalizeModel(model, 0.82);
       model.position.copy(prize.object.position);
