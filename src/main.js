@@ -98,6 +98,7 @@ const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
+const HOLD_TARGET_OFFSET = { x: 0, y: -0.62 + PRIZE_BODY_OFFSET_Y, z: 0.04 };
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -375,6 +376,8 @@ function buildPrizePlaceholders() {
       body: null,
       bodyOffsetY: PRIZE_BODY_OFFSET_Y,
       holdSpin: 0,
+      holdOffset: null,
+      holdBlend: 0,
     };
     createPrizeBody(prize);
     sceneObjects.prizes.push(prize);
@@ -573,33 +576,50 @@ function resetPrizePhysics(prize, rotate = true) {
   prize.body.quaternion.setFromEuler(0, rotate ? random(-0.35, 0.35) : 0, 0);
   prize.body.wakeUp();
   prize.holdSpin = 0;
+  prize.holdOffset = null;
+  prize.holdBlend = 0;
   syncPrizeVisual(prize);
 }
 
 function capturePrize(prize) {
   prize.grabbed = true;
   prize.holdSpin = prize.object.rotation.y || 0;
+  prize.holdBlend = 0;
   if (!prize.body) return;
+  prize.holdOffset = {
+    x: prize.body.position.x - claw.x,
+    y: prize.body.position.y - claw.y,
+    z: prize.body.position.z - claw.z,
+  };
   prize.body.type = CANNON.Body.KINEMATIC;
   prize.body.mass = 0;
   prize.body.collisionResponse = false;
   prize.body.updateMassProperties();
   prize.body.velocity.set(0, 0, 0);
   prize.body.angularVelocity.set(0, 0, 0);
-  syncHeldPrize(prize, 16);
+  syncPrizeVisual(prize);
 }
 
 function syncHeldPrize(prize, dt) {
   if (!prize.body) {
-    prize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
+    prize.object.position.lerp(new THREE.Vector3(claw.x, claw.y - 0.62, claw.z + 0.04), 0.12);
     prize.object.rotation.y += dt * 0.002;
     return;
   }
 
   const seconds = Math.max(dt / 1000, 1 / 120);
-  const nextX = claw.x;
-  const nextY = claw.y - 0.62 + (prize.bodyOffsetY || PRIZE_BODY_OFFSET_Y);
-  const nextZ = claw.z + 0.04;
+  prize.holdOffset ||= {
+    x: HOLD_TARGET_OFFSET.x,
+    y: HOLD_TARGET_OFFSET.y,
+    z: HOLD_TARGET_OFFSET.z,
+  };
+  prize.holdBlend = approach(prize.holdBlend || 0, 1, dt * 0.0018);
+  const offsetX = lerp(prize.holdOffset.x, HOLD_TARGET_OFFSET.x, prize.holdBlend);
+  const offsetY = lerp(prize.holdOffset.y, HOLD_TARGET_OFFSET.y, prize.holdBlend);
+  const offsetZ = lerp(prize.holdOffset.z, HOLD_TARGET_OFFSET.z, prize.holdBlend);
+  const nextX = claw.x + offsetX;
+  const nextY = claw.y + offsetY;
+  const nextZ = claw.z + offsetZ;
   prize.body.velocity.set(
     (nextX - prize.body.position.x) / seconds,
     (nextY - prize.body.position.y) / seconds,
@@ -616,6 +636,8 @@ function releaseGrabbedPrize() {
   if (!prize) return;
 
   prize.grabbed = false;
+  prize.holdOffset = null;
+  prize.holdBlend = 0;
   if (!prize.body) return;
   prize.body.type = CANNON.Body.DYNAMIC;
   prize.body.mass = PRIZE_MASS;
