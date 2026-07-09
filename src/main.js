@@ -97,6 +97,7 @@ const PRIZE_BODY_OFFSET_Y = 0.42;
 const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
+const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
   prizeMaterial: null,
@@ -985,16 +986,21 @@ function readDebugInput(dt) {
 function readDemoInput(dt) {
   game.demoTime += dt;
   const t = game.demoTime;
+  const targetX = worldXToInput(DEMO_TARGET.x);
+  const targetY = worldZToInput(DEMO_TARGET.z);
   input.openPalm = t < 1250;
-  input.fist = t > 2500 && t < 3300;
+  input.fist = t > 4200 && t < 5100;
 
   if (t < 1250) {
     input.rawX = 0.5;
     input.rawY = 0.5;
-  } else if (t < 2500) {
-    const u = (t - 1250) / 1250;
-    input.rawX = lerp(0.5, 0.47, easeInOut(u));
-    input.rawY = lerp(0.5, 0.72, easeInOut(u));
+  } else if (t < 3600) {
+    const u = (t - 1250) / 2350;
+    input.rawX = lerp(0.5, targetX, easeInOut(u));
+    input.rawY = lerp(0.5, targetY, easeInOut(u));
+  } else {
+    input.rawX = targetX;
+    input.rawY = targetY;
   }
 }
 
@@ -1358,6 +1364,14 @@ function lerp(a, b, t) {
 
 function map(value, inMin, inMax, outMin, outMax) {
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
+}
+
+function worldXToInput(x) {
+  return clamp(map(x, WORLD.xMin, WORLD.xMax, 0, 1), 0, 1);
+}
+
+function worldZToInput(z) {
+  return clamp(map(z, WORLD.zMin, WORLD.zMax, 0, 1), 0, 1);
 }
 
 function random(min, max) {
