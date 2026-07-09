@@ -97,7 +97,7 @@ const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
-const HOLD_TARGET_OFFSET = { x: 0, y: -0.62 + PRIZE_BODY_OFFSET_Y, z: 0.04 };
+const GRIP_CONSTRAINT_FORCE = 28;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -106,6 +106,7 @@ const physics = {
   clawMaterial: null,
   clawBody: null,
   clawBodies: [],
+  gripAnchors: [],
   fixedTimeStep: 1 / 60,
   maxSubSteps: 5,
 };
@@ -377,6 +378,7 @@ function buildPrizePlaceholders() {
       holdSpin: 0,
       holdOffset: null,
       holdBlend: 0,
+      gripConstraints: [],
     };
     createPrizeBody(prize);
     sceneObjects.prizes.push(prize);
@@ -496,8 +498,10 @@ function initPhysics() {
   for (let i = 0; i < 3; i += 1) {
     createClawCollider(0.16, `knuckle-${i}`);
     createClawCollider(0.16, `tip-${i}`);
+    createGripAnchor();
   }
   syncClawCollider(16, true);
+  syncGripAnchors(16, true);
 }
 
 function addStaticBody(center, halfExtents) {
@@ -519,6 +523,18 @@ function createClawCollider(radius, role) {
   body.userData = { role, radius };
   physics.world.addBody(body);
   physics.clawBodies.push(body);
+  return body;
+}
+
+function createGripAnchor() {
+  const body = new CANNON.Body({
+    mass: 0,
+    type: CANNON.Body.KINEMATIC,
+    material: physics.clawMaterial,
+    collisionResponse: false,
+  });
+  physics.world.addBody(body);
+  physics.gripAnchors.push(body);
   return body;
 }
 
@@ -577,56 +593,49 @@ function resetPrizePhysics(prize, rotate = true) {
   prize.holdSpin = 0;
   prize.holdOffset = null;
   prize.holdBlend = 0;
+  clearPrizeGrip(prize);
   syncPrizeVisual(prize);
 }
 
 function capturePrize(prize) {
   prize.grabbed = true;
-  prize.holdSpin = prize.object.rotation.y || 0;
-  prize.holdBlend = 0;
   if (!prize.body) return;
-  prize.holdOffset = {
-    x: prize.body.position.x - claw.x,
-    y: prize.body.position.y - claw.y,
-    z: prize.body.position.z - claw.z,
-  };
-  prize.body.type = CANNON.Body.KINEMATIC;
-  prize.body.mass = 0;
-  prize.body.collisionResponse = false;
+
+  clearPrizeGrip(prize);
+  prize.body.type = CANNON.Body.DYNAMIC;
+  prize.body.mass = PRIZE_MASS;
+  prize.body.collisionResponse = true;
   prize.body.updateMassProperties();
-  prize.body.velocity.set(0, 0, 0);
-  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.linearDamping = 0.76;
+  prize.body.angularDamping = 0.9;
+  prize.body.wakeUp();
+
+  syncGripAnchors(16, true);
+  const anchors = getGripAnchorTargets();
+  prize.gripConstraints = anchors.map((target, index) => {
+    const anchor = physics.gripAnchors[index];
+    const worldPivot = new CANNON.Vec3(target.x, target.y, target.z);
+    const localPivot = prize.body.pointToLocalFrame(worldPivot);
+    localPivot.x = clamp(localPivot.x, -PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.x);
+    localPivot.y = clamp(localPivot.y, -PRIZE_BODY_HALF.y * 0.55, PRIZE_BODY_HALF.y * 0.55);
+    localPivot.z = clamp(localPivot.z, -PRIZE_BODY_HALF.z, PRIZE_BODY_HALF.z);
+    const constraint = new CANNON.PointToPointConstraint(
+      prize.body,
+      localPivot,
+      anchor,
+      new CANNON.Vec3(0, 0, 0),
+      GRIP_CONSTRAINT_FORCE,
+    );
+    physics.world.addConstraint(constraint);
+    return constraint;
+  });
   syncPrizeVisual(prize);
 }
 
 function syncHeldPrize(prize, dt) {
-  if (!prize.body) {
-    prize.object.position.lerp(new THREE.Vector3(claw.x, claw.y - 0.62, claw.z + 0.04), 0.12);
-    prize.object.rotation.y += dt * 0.002;
-    return;
-  }
-
-  const seconds = Math.max(dt / 1000, 1 / 120);
-  prize.holdOffset ||= {
-    x: HOLD_TARGET_OFFSET.x,
-    y: HOLD_TARGET_OFFSET.y,
-    z: HOLD_TARGET_OFFSET.z,
-  };
-  prize.holdBlend = approach(prize.holdBlend || 0, 1, dt * 0.0018);
-  const offsetX = lerp(prize.holdOffset.x, HOLD_TARGET_OFFSET.x, prize.holdBlend);
-  const offsetY = lerp(prize.holdOffset.y, HOLD_TARGET_OFFSET.y, prize.holdBlend);
-  const offsetZ = lerp(prize.holdOffset.z, HOLD_TARGET_OFFSET.z, prize.holdBlend);
-  const nextX = claw.x + offsetX;
-  const nextY = claw.y + offsetY;
-  const nextZ = claw.z + offsetZ;
-  prize.body.velocity.set(
-    (nextX - prize.body.position.x) / seconds,
-    (nextY - prize.body.position.y) / seconds,
-    (nextZ - prize.body.position.z) / seconds,
-  );
-  prize.body.position.set(nextX, nextY, nextZ);
-  prize.holdSpin = (prize.holdSpin || 0) + dt * 0.002;
-  prize.body.quaternion.setFromEuler(0, prize.holdSpin, 0);
+  if (!prize.body) return;
+  syncGripAnchors(dt);
+  prize.body.wakeUp();
   syncPrizeVisual(prize);
 }
 
@@ -638,13 +647,30 @@ function releaseGrabbedPrize() {
   prize.holdOffset = null;
   prize.holdBlend = 0;
   if (!prize.body) return;
+  clearPrizeGrip(prize);
   prize.body.type = CANNON.Body.DYNAMIC;
   prize.body.mass = PRIZE_MASS;
   prize.body.collisionResponse = true;
   prize.body.updateMassProperties();
-  prize.body.velocity.set(random(-0.35, 0.18), -1.15, random(0.2, 0.7));
-  prize.body.angularVelocity.set(random(-2.2, 2.2), random(-2.4, 2.4), random(-2.2, 2.2));
+  prize.body.linearDamping = 0.62;
+  prize.body.angularDamping = 0.82;
+  prize.body.velocity.x += random(-0.2, 0.15);
+  prize.body.velocity.y -= 0.85;
+  prize.body.velocity.z += random(0.18, 0.55);
+  prize.body.angularVelocity.set(random(-1.6, 1.6), random(-2.0, 2.0), random(-1.6, 1.6));
   prize.body.wakeUp();
+}
+
+function clearPrizeGrip(prize) {
+  if (!prize.gripConstraints?.length || !physics.world) {
+    prize.gripConstraints = [];
+    return;
+  }
+
+  prize.gripConstraints.forEach((constraint) => {
+    physics.world.removeConstraint(constraint);
+  });
+  prize.gripConstraints = [];
 }
 
 function syncClawCollider(dt) {
@@ -669,6 +695,29 @@ function syncClawCollider(dt) {
     body.aabbNeedsUpdate = true;
   });
   wakePrizesNearClaw(targets);
+}
+
+function syncGripAnchors(dt, teleport = false) {
+  if (!physics.gripAnchors.length) return;
+
+  const seconds = Math.max(dt / 1000, 1 / 120);
+  getGripAnchorTargets().forEach((target, index) => {
+    const body = physics.gripAnchors[index];
+    if (!body) return;
+
+    const dx = target.x - body.position.x;
+    const dy = target.y - body.position.y;
+    const dz = target.z - body.position.z;
+    if (teleport || Math.hypot(dx, dy, dz) > 1.4) {
+      body.position.set(target.x, target.y, target.z);
+      body.previousPosition.copy(body.position);
+      body.velocity.set(0, 0, 0);
+    } else {
+      body.velocity.set(dx / seconds, dy / seconds, dz / seconds);
+      body.position.set(target.x, target.y, target.z);
+    }
+    body.aabbNeedsUpdate = true;
+  });
 }
 
 function getClawColliderTargets(clawY = claw.y) {
@@ -704,6 +753,10 @@ function getClawColliderTargets(clawY = claw.y) {
     });
   }
   return targets;
+}
+
+function getGripAnchorTargets() {
+  return getClawColliderTargets(claw.y).filter((target) => target.role.startsWith("tip"));
 }
 
 function constrainClawAgainstPrizes(dt) {
@@ -1135,17 +1188,11 @@ function updateState(dt) {
     }
   } else if (game.state === STATES.LIFTING) {
     claw.targetY = WORLD.clawHomeY;
-    if (game.grabbedPrize) {
-      syncHeldPrize(game.grabbedPrize, dt);
-    }
     if (Math.abs(claw.y - WORLD.clawHomeY) < 0.05) setState(STATES.RETURNING);
   } else if (game.state === STATES.RETURNING) {
     claw.targetX = WORLD.exit.x;
     claw.targetZ = WORLD.exit.z - 0.08;
     claw.targetY = WORLD.clawHomeY;
-    if (game.grabbedPrize) {
-      syncHeldPrize(game.grabbedPrize, dt);
-    }
     if (Math.abs(claw.x - claw.targetX) < 0.07 && Math.abs(claw.z - claw.targetZ) < 0.07) {
       game.releaseStarted = false;
       setState(STATES.RELEASING);
@@ -1243,11 +1290,16 @@ function updateClaw(dt) {
   sceneObjects.cable.scale.set(1, cableLength, 1);
   sceneObjects.cable.position.set(claw.x, claw.y + cableLength / 2, claw.z);
   syncClawCollider(dt);
+  if (game.grabbedPrize) syncHeldPrize(game.grabbedPrize, dt);
 }
 
 function updatePrizes(now) {
   sceneObjects.prizes.forEach((prize) => {
-    if (prize.grabbed || prize.collected || !prize.object.visible) return;
+    if (prize.collected || !prize.object.visible) return;
+    if (prize.grabbed) {
+      syncPrizeVisual(prize);
+      return;
+    }
     if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
     syncPrizeVisual(prize);
   });
@@ -1457,6 +1509,7 @@ window.__clawDebug = {
       prizeCount: sceneObjects.prizes.length,
       physicsBodies: physics.world ? physics.world.bodies.length : 0,
       clawColliderCount: physics.clawBodies.length,
+      gripConstraintCount: game.grabbedPrize?.gripConstraints?.length || 0,
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
     };
