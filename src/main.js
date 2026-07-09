@@ -97,7 +97,8 @@ const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
-const GRIP_CONSTRAINT_FORCE = 28;
+const CLAW_GRIP_CLOSED = 0.48;
+const GRIP_CONSTRAINT_FORCE = 90;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -608,6 +609,8 @@ function capturePrize(prize) {
   prize.body.updateMassProperties();
   prize.body.linearDamping = 0.76;
   prize.body.angularDamping = 0.9;
+  prize.body.velocity.scale(0.25, prize.body.velocity);
+  prize.body.angularVelocity.scale(0.35, prize.body.angularVelocity);
   prize.body.wakeUp();
 
   syncGripAnchors(16, true);
@@ -786,7 +789,9 @@ function constrainClawAgainstPrizes(dt) {
         pushPrizeAwayFromClaw(prize, target, 0.2, dt);
       } else if (sideContact > 0) {
         touching = true;
-        pushPrizeAwayFromClaw(prize, target, sideContact, dt);
+        if (game.state === STATES.GRABBING && claw.closed > 0.3) {
+          pushPrizeAwayFromClaw(prize, target, sideContact * 0.16, dt);
+        }
       }
     });
   });
@@ -1180,10 +1185,13 @@ function updateState(dt) {
       setState(STATES.GRABBING);
     }
   } else if (game.state === STATES.GRABBING) {
-    claw.closed = approach(claw.closed, 1, dt * 0.004);
-    if (game.stateTime > 560) {
+    claw.targetY = WORLD.clawDropY;
+    claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * 0.0028);
+    if (!game.grabbedPrize && game.stateTime > 720 && Math.abs(claw.closed - CLAW_GRIP_CLOSED) < 0.03) {
       game.grabbedPrize = pickPrize();
       if (game.grabbedPrize) capturePrize(game.grabbedPrize);
+    }
+    if (game.stateTime > 1250) {
       setState(STATES.LIFTING);
     }
   } else if (game.state === STATES.LIFTING) {
@@ -1510,6 +1518,9 @@ window.__clawDebug = {
       physicsBodies: physics.world ? physics.world.bodies.length : 0,
       clawColliderCount: physics.clawBodies.length,
       gripConstraintCount: game.grabbedPrize?.gripConstraints?.length || 0,
+      clawY: Number(claw.y.toFixed(3)),
+      clawClosed: Number(claw.closed.toFixed(3)),
+      grabbedPrizeY: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.position.y.toFixed(3)) : null,
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
     };
