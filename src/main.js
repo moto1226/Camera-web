@@ -100,6 +100,7 @@ const physics = {
   wallMaterial: null,
   clawMaterial: null,
   clawBody: null,
+  clawBodies: [],
   fixedTimeStep: 1 / 60,
   maxSubSteps: 3,
 };
@@ -484,14 +485,12 @@ function initPhysics() {
   addStaticBody([0, 0.72, WORLD.zMin - 0.26], [3.35, 0.72, 0.1]);
   addStaticBody([0, 0.72, WORLD.zMax + 0.22], [3.35, 0.72, 0.1]);
 
-  physics.clawBody = new CANNON.Body({
-    mass: 0,
-    type: CANNON.Body.KINEMATIC,
-    material: physics.clawMaterial,
-  });
-  physics.clawBody.addShape(new CANNON.Sphere(0.34));
-  physics.clawBody.position.set(claw.x, claw.y - 0.72, claw.z);
-  physics.world.addBody(physics.clawBody);
+  physics.clawBody = createClawCollider(0.28, "hub");
+  for (let i = 0; i < 3; i += 1) {
+    createClawCollider(0.19, `knuckle-${i}`);
+    createClawCollider(0.22, `tip-${i}`);
+  }
+  syncClawCollider(16, true);
 }
 
 function addStaticBody(center, halfExtents) {
@@ -499,6 +498,20 @@ function addStaticBody(center, halfExtents) {
   body.addShape(new CANNON.Box(new CANNON.Vec3(halfExtents[0], halfExtents[1], halfExtents[2])));
   body.position.set(center[0], center[1], center[2]);
   physics.world.addBody(body);
+  return body;
+}
+
+function createClawCollider(radius, role) {
+  const body = new CANNON.Body({
+    mass: 0,
+    type: CANNON.Body.KINEMATIC,
+    material: physics.clawMaterial,
+  });
+  body.addShape(new CANNON.Sphere(radius));
+  body.collisionResponse = true;
+  body.userData = { role };
+  physics.world.addBody(body);
+  physics.clawBodies.push(body);
   return body;
 }
 
@@ -609,17 +622,64 @@ function releaseGrabbedPrize() {
 }
 
 function syncClawCollider(dt) {
-  if (!physics.clawBody) return;
+  if (!physics.clawBodies.length) return;
   const seconds = Math.max(dt / 1000, 1 / 120);
-  const nextX = claw.x;
-  const nextY = claw.y - 0.72;
-  const nextZ = claw.z;
-  physics.clawBody.velocity.set(
-    (nextX - physics.clawBody.position.x) / seconds,
-    (nextY - physics.clawBody.position.y) / seconds,
-    (nextZ - physics.clawBody.position.z) / seconds,
-  );
-  physics.clawBody.position.set(nextX, nextY, nextZ);
+  const targets = getClawColliderTargets();
+  targets.forEach((target, index) => {
+    const body = physics.clawBodies[index];
+    if (!body) return;
+
+    const dx = target.x - body.position.x;
+    const dy = target.y - body.position.y;
+    const dz = target.z - body.position.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance > 1.4) {
+      body.position.set(target.x, target.y, target.z);
+      body.previousPosition.copy(body.position);
+      body.velocity.set(0, 0, 0);
+    } else {
+      body.velocity.set(dx / seconds, dy / seconds, dz / seconds);
+    }
+    body.aabbNeedsUpdate = true;
+  });
+  wakePrizesNearClaw(targets);
+}
+
+function getClawColliderTargets() {
+  const targets = [{ x: claw.x, y: claw.y - 0.48, z: claw.z }];
+  const knuckleRadius = lerp(0.52, 0.26, claw.closed);
+  const tipRadius = lerp(0.38, 0.08, claw.closed);
+  const knuckleY = claw.y - 0.62;
+  const tipY = claw.y - 0.88;
+
+  for (let i = 0; i < 3; i += 1) {
+    const angle = i * (Math.PI * 2 / 3) + Math.PI / 6;
+    targets.push({
+      x: claw.x + Math.cos(angle) * knuckleRadius,
+      y: knuckleY,
+      z: claw.z + Math.sin(angle) * knuckleRadius,
+    });
+    targets.push({
+      x: claw.x + Math.cos(angle) * tipRadius,
+      y: tipY,
+      z: claw.z + Math.sin(angle) * tipRadius,
+    });
+  }
+  return targets;
+}
+
+function wakePrizesNearClaw(targets) {
+  if (![STATES.CONTROLLING, STATES.DROPPING, STATES.GRABBING].includes(game.state)) return;
+  sceneObjects.prizes.forEach((prize) => {
+    if (!prize.body || prize.grabbed || prize.collected) return;
+    const near = targets.some((target) => {
+      const dx = target.x - prize.body.position.x;
+      const dy = target.y - prize.body.position.y;
+      const dz = target.z - prize.body.position.z;
+      return Math.hypot(dx, dy, dz) < 0.78;
+    });
+    if (near) prize.body.wakeUp();
+  });
 }
 
 function stepPhysics(dt) {
@@ -1248,7 +1308,45 @@ window.__clawDebug = {
       renderer: "three",
       prizeCount: sceneObjects.prizes.length,
       physicsBodies: physics.world ? physics.world.bodies.length : 0,
+      clawColliderCount: physics.clawBodies.length,
       effectCount: sceneObjects.effects.length,
+    };
+  },
+  probeClawCollision() {
+    resetRoundForReplay();
+    const prize = sceneObjects.prizes[0];
+    if (!prize?.body) return { displacement: 0, clawColliderCount: physics.clawBodies.length };
+
+    const start = { x: 0.28, y: WORLD.floorY + PRIZE_BODY_OFFSET_Y, z: 0.16 };
+    prize.body.position.set(start.x, start.y, start.z);
+    prize.body.velocity.set(0, 0, 0);
+    prize.body.angularVelocity.set(0, 0, 0);
+    prize.body.quaternion.setFromEuler(0, 0, 0);
+    prize.body.wakeUp();
+    syncPrizeVisual(prize);
+
+    claw.x = 0;
+    claw.z = 0;
+    claw.targetX = 0;
+    claw.targetZ = 0;
+    claw.closed = 0.2;
+    for (let i = 0; i < 58; i += 1) {
+      const t = i / 57;
+      claw.y = lerp(WORLD.clawHomeY, WORLD.clawDropY, easeInOut(t));
+      syncClawCollider(16);
+      stepPhysics(16);
+      updatePrizes(performance.now());
+    }
+
+    const end = { x: prize.body.position.x, y: prize.body.position.y, z: prize.body.position.z };
+    const displacement = Math.hypot(end.x - start.x, end.z - start.z);
+    resetRoundForReplay();
+    render(performance.now());
+    return {
+      displacement,
+      start,
+      end,
+      clawColliderCount: physics.clawBodies.length,
     };
   },
 };
