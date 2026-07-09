@@ -97,6 +97,7 @@ const PRIZE_BODY_OFFSET_Y = 0.42;
 const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
+const CLAW_SIDE_GRIP_Y = 0.13;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -489,7 +490,7 @@ function initPhysics() {
   addStaticBody([0, 0.72, WORLD.zMin - 0.26], [3.35, 0.72, 0.1]);
   addStaticBody([0, 0.72, WORLD.zMax + 0.22], [3.35, 0.72, 0.1]);
 
-  physics.clawBody = createClawCollider(0.24, "hub");
+  physics.clawBody = createClawCollider(0.15, "hub");
   for (let i = 0; i < 3; i += 1) {
     createClawCollider(0.16, `knuckle-${i}`);
     createClawCollider(0.16, `tip-${i}`);
@@ -652,9 +653,9 @@ function syncClawCollider(dt) {
 function getClawColliderTargets(clawY = claw.y) {
   const targets = [{
     x: claw.x,
-    y: clawY - 0.44,
+    y: clawY - 0.02,
     z: claw.z,
-    radius: physics.clawBodies[0]?.userData?.radius || 0.24,
+    radius: physics.clawBodies[0]?.userData?.radius || 0.15,
     role: "hub",
   }];
   const knuckleRadius = lerp(0.52, 0.26, claw.closed);
@@ -700,17 +701,18 @@ function constrainClawAgainstPrizes(dt) {
 
       const dx = target.x - prize.body.position.x;
       const dz = target.z - prize.body.position.z;
-      const overlapX = PRIZE_BODY_HALF.x + target.radius * 0.72;
-      const overlapZ = PRIZE_BODY_HALF.z + target.radius * 0.72;
-      const normalized = (dx * dx) / (overlapX * overlapX) + (dz * dz) / (overlapZ * overlapZ);
-      if (normalized > 1) return;
-
       const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
-      const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
-      if (target.y < minTargetY) {
+      const topContact = getTopContactDepth(target, prize, dx, dz);
+      const sideContact = getSideContactStrength(target, prize, dx, dz);
+
+      if (topContact > 0) {
+        const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
         lift = Math.max(lift, minTargetY - target.y);
         touching = true;
-        pushPrizeAwayFromClaw(prize, target, Math.max(0.15, 1 - Math.sqrt(normalized)), dt);
+        pushPrizeAwayFromClaw(prize, target, 0.2, dt);
+      } else if (sideContact > 0) {
+        touching = true;
+        pushPrizeAwayFromClaw(prize, target, sideContact, dt);
       }
     });
   });
@@ -724,6 +726,34 @@ function constrainClawAgainstPrizes(dt) {
 
   game.clawContactMs = Math.max(0, game.clawContactMs - dt * 0.65);
   return touching;
+}
+
+function getTopContactDepth(target, prize, dx, dz) {
+  if (!target.role.startsWith("hub") && !target.role.startsWith("tip")) return 0;
+
+  const topBlockX = PRIZE_BODY_HALF.x * 0.55 + target.radius * 0.35;
+  const topBlockZ = PRIZE_BODY_HALF.z * 0.55 + target.radius * 0.35;
+  const normalized = (dx * dx) / (topBlockX * topBlockX) + (dz * dz) / (topBlockZ * topBlockZ);
+  if (normalized > 1) return 0;
+
+  const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+  const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
+  return Math.max(0, minTargetY - target.y);
+}
+
+function getSideContactStrength(target, prize, dx, dz) {
+  if (target.role === "hub") return 0;
+
+  const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+  const sideBandTop = prizeTop - CLAW_SIDE_GRIP_Y;
+  const sideBandBottom = prize.body.position.y - PRIZE_BODY_HALF.y * 0.72;
+  if (target.y > sideBandTop || target.y < sideBandBottom) return 0;
+
+  const sideX = PRIZE_BODY_HALF.x + target.radius * 0.85;
+  const sideZ = PRIZE_BODY_HALF.z + target.radius * 0.85;
+  const normalized = (dx * dx) / (sideX * sideX) + (dz * dz) / (sideZ * sideZ);
+  if (normalized > 1) return 0;
+  return Math.max(0.18, 1 - Math.sqrt(normalized));
 }
 
 function pushPrizeAwayFromClaw(prize, target, strength, dt) {
@@ -756,12 +786,7 @@ function measureClawPrizePenetration(prize) {
   getClawColliderTargets(claw.y).forEach((target) => {
     const dx = target.x - prize.body.position.x;
     const dz = target.z - prize.body.position.z;
-    const overlapX = PRIZE_BODY_HALF.x + target.radius * 0.72;
-    const overlapZ = PRIZE_BODY_HALF.z + target.radius * 0.72;
-    const normalized = (dx * dx) / (overlapX * overlapX) + (dz * dz) / (overlapZ * overlapZ);
-    if (normalized > 1) return;
-    const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
-    maxPenetration = Math.max(maxPenetration, prizeTop + target.radius - target.y);
+    maxPenetration = Math.max(maxPenetration, getTopContactDepth(target, prize, dx, dz));
   });
   return maxPenetration;
 }
