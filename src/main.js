@@ -72,6 +72,7 @@ const game = {
   handPresent: false,
   palmOpenMs: 0,
   fistMs: 0,
+  clawContactMs: 0,
   calibration: null,
   result: "未开始",
   grabbedPrize: null,
@@ -94,6 +95,8 @@ const claw = {
 
 const PRIZE_BODY_OFFSET_Y = 0.42;
 const PRIZE_MASS = 0.58;
+const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
+const CLAW_CONTACT_SKIN = 0.025;
 const physics = {
   world: null,
   prizeMaterial: null,
@@ -102,7 +105,7 @@ const physics = {
   clawBody: null,
   clawBodies: [],
   fixedTimeStep: 1 / 60,
-  maxSubSteps: 3,
+  maxSubSteps: 5,
 };
 
 const renderer = new THREE.WebGLRenderer({
@@ -485,10 +488,10 @@ function initPhysics() {
   addStaticBody([0, 0.72, WORLD.zMin - 0.26], [3.35, 0.72, 0.1]);
   addStaticBody([0, 0.72, WORLD.zMax + 0.22], [3.35, 0.72, 0.1]);
 
-  physics.clawBody = createClawCollider(0.28, "hub");
+  physics.clawBody = createClawCollider(0.24, "hub");
   for (let i = 0; i < 3; i += 1) {
-    createClawCollider(0.19, `knuckle-${i}`);
-    createClawCollider(0.22, `tip-${i}`);
+    createClawCollider(0.16, `knuckle-${i}`);
+    createClawCollider(0.16, `tip-${i}`);
   }
   syncClawCollider(16, true);
 }
@@ -509,7 +512,7 @@ function createClawCollider(radius, role) {
   });
   body.addShape(new CANNON.Sphere(radius));
   body.collisionResponse = true;
-  body.userData = { role };
+  body.userData = { role, radius };
   physics.world.addBody(body);
   physics.clawBodies.push(body);
   return body;
@@ -527,7 +530,7 @@ function createPrizeBody(prize) {
     sleepSpeedLimit: 0.05,
     sleepTimeLimit: 0.45,
   });
-  body.addShape(new CANNON.Box(new CANNON.Vec3(0.28, 0.36, 0.26)));
+  body.addShape(new CANNON.Box(new CANNON.Vec3(PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.y, PRIZE_BODY_HALF.z)));
   body.position.set(prize.home.x, prize.home.y + PRIZE_BODY_OFFSET_Y, prize.home.z);
   body.quaternion.setFromEuler(0, random(-0.35, 0.35), 0);
   physics.world.addBody(body);
@@ -624,7 +627,7 @@ function releaseGrabbedPrize() {
 function syncClawCollider(dt) {
   if (!physics.clawBodies.length) return;
   const seconds = Math.max(dt / 1000, 1 / 120);
-  const targets = getClawColliderTargets();
+  const targets = getClawColliderTargets(claw.y);
   targets.forEach((target, index) => {
     const body = physics.clawBodies[index];
     if (!body) return;
@@ -645,27 +648,121 @@ function syncClawCollider(dt) {
   wakePrizesNearClaw(targets);
 }
 
-function getClawColliderTargets() {
-  const targets = [{ x: claw.x, y: claw.y - 0.48, z: claw.z }];
+function getClawColliderTargets(clawY = claw.y) {
+  const targets = [{
+    x: claw.x,
+    y: clawY - 0.44,
+    z: claw.z,
+    radius: physics.clawBodies[0]?.userData?.radius || 0.24,
+    role: "hub",
+  }];
   const knuckleRadius = lerp(0.52, 0.26, claw.closed);
   const tipRadius = lerp(0.38, 0.08, claw.closed);
-  const knuckleY = claw.y - 0.62;
-  const tipY = claw.y - 0.88;
+  const knuckleY = clawY - 0.56;
+  const tipY = clawY - 0.72;
 
   for (let i = 0; i < 3; i += 1) {
     const angle = i * (Math.PI * 2 / 3) + Math.PI / 6;
+    const knuckleBody = physics.clawBodies[i * 2 + 1];
+    const tipBody = physics.clawBodies[i * 2 + 2];
     targets.push({
       x: claw.x + Math.cos(angle) * knuckleRadius,
       y: knuckleY,
       z: claw.z + Math.sin(angle) * knuckleRadius,
+      radius: knuckleBody?.userData?.radius || 0.16,
+      role: `knuckle-${i}`,
     });
     targets.push({
       x: claw.x + Math.cos(angle) * tipRadius,
       y: tipY,
       z: claw.z + Math.sin(angle) * tipRadius,
+      radius: tipBody?.userData?.radius || 0.16,
+      role: `tip-${i}`,
     });
   }
   return targets;
+}
+
+function constrainClawAgainstPrizes(dt) {
+  if (![STATES.DROPPING, STATES.GRABBING].includes(game.state) || game.grabbedPrize) {
+    game.clawContactMs = 0;
+    return false;
+  }
+
+  const targets = getClawColliderTargets(claw.y);
+  let lift = 0;
+  let touching = false;
+
+  targets.forEach((target) => {
+    sceneObjects.prizes.forEach((prize) => {
+      if (!prize.body || prize.grabbed || prize.collected || !prize.object.visible) return;
+
+      const dx = target.x - prize.body.position.x;
+      const dz = target.z - prize.body.position.z;
+      const overlapX = PRIZE_BODY_HALF.x + target.radius * 0.72;
+      const overlapZ = PRIZE_BODY_HALF.z + target.radius * 0.72;
+      const normalized = (dx * dx) / (overlapX * overlapX) + (dz * dz) / (overlapZ * overlapZ);
+      if (normalized > 1) return;
+
+      const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+      const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
+      if (target.y < minTargetY) {
+        lift = Math.max(lift, minTargetY - target.y);
+        touching = true;
+        pushPrizeAwayFromClaw(prize, target, Math.max(0.15, 1 - Math.sqrt(normalized)), dt);
+      }
+    });
+  });
+
+  if (lift > 0) {
+    claw.y += lift;
+    claw.targetY = Math.max(claw.targetY, claw.y);
+    game.clawContactMs += dt;
+    return true;
+  }
+
+  game.clawContactMs = Math.max(0, game.clawContactMs - dt * 0.65);
+  return touching;
+}
+
+function pushPrizeAwayFromClaw(prize, target, strength, dt) {
+  const body = prize.body;
+  const dx = body.position.x - target.x;
+  const dz = body.position.z - target.z;
+  let length = Math.hypot(dx, dz);
+  let nx = dx;
+  let nz = dz;
+
+  if (length < 0.001) {
+    nx = body.position.x - claw.x || 0.001;
+    nz = body.position.z - claw.z || 0.001;
+    length = Math.hypot(nx, nz);
+  }
+
+  nx /= length;
+  nz /= length;
+  const impulse = strength * Math.min(4.2, 1.8 + dt * 0.012);
+  body.velocity.x += nx * impulse;
+  body.velocity.z += nz * impulse;
+  body.angularVelocity.x += nz * strength * 2.2;
+  body.angularVelocity.z -= nx * strength * 2.2;
+  body.wakeUp();
+}
+
+function measureClawPrizePenetration(prize) {
+  if (!prize?.body) return 0;
+  let maxPenetration = 0;
+  getClawColliderTargets(claw.y).forEach((target) => {
+    const dx = target.x - prize.body.position.x;
+    const dz = target.z - prize.body.position.z;
+    const overlapX = PRIZE_BODY_HALF.x + target.radius * 0.72;
+    const overlapZ = PRIZE_BODY_HALF.z + target.radius * 0.72;
+    const normalized = (dx * dx) / (overlapX * overlapX) + (dz * dz) / (overlapZ * overlapZ);
+    if (normalized > 1) return;
+    const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+    maxPenetration = Math.max(maxPenetration, prizeTop + target.radius - target.y);
+  });
+  return maxPenetration;
 }
 
 function wakePrizesNearClaw(targets) {
@@ -916,6 +1013,7 @@ function resetGame() {
   game.result = "未开始";
   game.grabbedPrize = null;
   game.releaseStarted = false;
+  game.clawContactMs = 0;
   game.palmOpenMs = 0;
   game.fistMs = 0;
   game.calibration = null;
@@ -985,7 +1083,9 @@ function updateState(dt) {
   } else if (game.state === STATES.DROPPING) {
     claw.targetY = WORLD.clawDropY;
     claw.closed = approach(claw.closed, 0.2, dt * 0.006);
-    if (Math.abs(claw.y - WORLD.clawDropY) < 0.05) setState(STATES.GRABBING);
+    if (Math.abs(claw.y - WORLD.clawDropY) < 0.05 || game.clawContactMs > 180 || game.stateTime > 1500) {
+      setState(STATES.GRABBING);
+    }
   } else if (game.state === STATES.GRABBING) {
     claw.closed = approach(claw.closed, 1, dt * 0.004);
     if (game.stateTime > 560) {
@@ -1056,6 +1156,7 @@ function resetRoundForReplay() {
   game.demoActive = false;
   game.demoTime = 0;
   game.releaseStarted = false;
+  game.clawContactMs = 0;
   game.round += 1;
   input.rawX = 0.5;
   input.rawY = 0.5;
@@ -1089,6 +1190,7 @@ function updateClaw(dt) {
   claw.x = lerp(claw.x, claw.targetX, follow);
   claw.y = lerp(claw.y, claw.targetY, follow);
   claw.z = lerp(claw.z, claw.targetZ, follow);
+  constrainClawAgainstPrizes(dt);
 
   sceneObjects.claw.position.set(claw.x, claw.y, claw.z);
   sceneObjects.fingers.forEach((finger) => {
@@ -1309,6 +1411,7 @@ window.__clawDebug = {
       prizeCount: sceneObjects.prizes.length,
       physicsBodies: physics.world ? physics.world.bodies.length : 0,
       clawColliderCount: physics.clawBodies.length,
+      clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
     };
   },
@@ -1325,25 +1428,35 @@ window.__clawDebug = {
     prize.body.wakeUp();
     syncPrizeVisual(prize);
 
+    const previousState = game.state;
+    game.state = STATES.DROPPING;
+    game.clawContactMs = 0;
     claw.x = 0;
     claw.z = 0;
     claw.targetX = 0;
     claw.targetZ = 0;
     claw.closed = 0.2;
+    let maxPenetration = 0;
     for (let i = 0; i < 58; i += 1) {
       const t = i / 57;
       claw.y = lerp(WORLD.clawHomeY, WORLD.clawDropY, easeInOut(t));
+      constrainClawAgainstPrizes(16);
       syncClawCollider(16);
       stepPhysics(16);
       updatePrizes(performance.now());
+      maxPenetration = Math.max(maxPenetration, measureClawPrizePenetration(prize));
     }
 
     const end = { x: prize.body.position.x, y: prize.body.position.y, z: prize.body.position.z };
     const displacement = Math.hypot(end.x - start.x, end.z - start.z);
+    const finalPenetration = measureClawPrizePenetration(prize);
+    game.state = previousState;
     resetRoundForReplay();
     render(performance.now());
     return {
       displacement,
+      maxPenetration,
+      finalPenetration,
       start,
       end,
       clawColliderCount: physics.clawBodies.length,
