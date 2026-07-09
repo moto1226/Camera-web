@@ -1,5 +1,6 @@
 import "./styles.css";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -74,6 +75,7 @@ const game = {
   calibration: null,
   result: "未开始",
   grabbedPrize: null,
+  releaseStarted: false,
   demoActive: false,
   demoTime: 0,
   round: 0,
@@ -88,6 +90,18 @@ const claw = {
   targetY: WORLD.clawHomeY,
   targetZ: 0,
   closed: 0,
+};
+
+const PRIZE_BODY_OFFSET_Y = 0.42;
+const PRIZE_MASS = 0.58;
+const physics = {
+  world: null,
+  prizeMaterial: null,
+  wallMaterial: null,
+  clawMaterial: null,
+  clawBody: null,
+  fixedTimeStep: 1 / 60,
+  maxSubSteps: 3,
 };
 
 const renderer = new THREE.WebGLRenderer({
@@ -163,6 +177,7 @@ sceneObjects.root.add(sceneObjects.machine);
 buildLights();
 buildMachine();
 buildClaw();
+initPhysics();
 buildPrizePlaceholders();
 loadPrizeModels();
 resizeRenderer();
@@ -343,7 +358,7 @@ function buildPrizePlaceholders() {
     mesh.position.set(pos[0], 0, pos[2]);
     sceneObjects.machine.add(mesh);
 
-    sceneObjects.prizes.push({
+    const prize = {
       id: `prize-${index}`,
       object: mesh,
       home: mesh.position.clone(),
@@ -351,7 +366,12 @@ function buildPrizePlaceholders() {
       grabbed: false,
       collected: false,
       wobble: Math.random() * Math.PI * 2,
-    });
+      body: null,
+      bodyOffsetY: PRIZE_BODY_OFFSET_Y,
+      holdSpin: 0,
+    };
+    createPrizeBody(prize);
+    sceneObjects.prizes.push(prize);
   });
 }
 
@@ -404,6 +424,7 @@ async function loadPrizeModels() {
       prize.object = model;
       prize.home = model.position.clone();
       prize.radius = 0.5;
+      syncPrizeVisual(prize);
     }),
   );
 }
@@ -426,6 +447,184 @@ function addBox(parent, size, position, material, castShadow) {
   mesh.receiveShadow = true;
   parent.add(mesh);
   return mesh;
+}
+
+function initPhysics() {
+  physics.world = new CANNON.World({
+    gravity: new CANNON.Vec3(0, -9.82, 0),
+  });
+  physics.world.allowSleep = true;
+  physics.world.broadphase = new CANNON.SAPBroadphase(physics.world);
+  physics.world.solver.iterations = 9;
+  physics.world.solver.tolerance = 0.001;
+
+  physics.prizeMaterial = new CANNON.Material("soft-prize");
+  physics.wallMaterial = new CANNON.Material("cabinet");
+  physics.clawMaterial = new CANNON.Material("claw");
+
+  physics.world.addContactMaterial(new CANNON.ContactMaterial(
+    physics.prizeMaterial,
+    physics.prizeMaterial,
+    { friction: 0.82, restitution: 0.08, contactEquationStiffness: 7e6 },
+  ));
+  physics.world.addContactMaterial(new CANNON.ContactMaterial(
+    physics.prizeMaterial,
+    physics.wallMaterial,
+    { friction: 0.7, restitution: 0.12 },
+  ));
+  physics.world.addContactMaterial(new CANNON.ContactMaterial(
+    physics.prizeMaterial,
+    physics.clawMaterial,
+    { friction: 0.45, restitution: 0.05 },
+  ));
+
+  addStaticBody([0, -0.08, 0.05], [3.45, 0.08, 2.2]);
+  addStaticBody([WORLD.xMin - 0.28, 0.72, 0.05], [0.1, 0.72, 2.1]);
+  addStaticBody([WORLD.xMax + 0.28, 0.72, 0.05], [0.1, 0.72, 2.1]);
+  addStaticBody([0, 0.72, WORLD.zMin - 0.26], [3.35, 0.72, 0.1]);
+  addStaticBody([0, 0.72, WORLD.zMax + 0.22], [3.35, 0.72, 0.1]);
+
+  physics.clawBody = new CANNON.Body({
+    mass: 0,
+    type: CANNON.Body.KINEMATIC,
+    material: physics.clawMaterial,
+  });
+  physics.clawBody.addShape(new CANNON.Sphere(0.34));
+  physics.clawBody.position.set(claw.x, claw.y - 0.72, claw.z);
+  physics.world.addBody(physics.clawBody);
+}
+
+function addStaticBody(center, halfExtents) {
+  const body = new CANNON.Body({ mass: 0, material: physics.wallMaterial });
+  body.addShape(new CANNON.Box(new CANNON.Vec3(halfExtents[0], halfExtents[1], halfExtents[2])));
+  body.position.set(center[0], center[1], center[2]);
+  physics.world.addBody(body);
+  return body;
+}
+
+function createPrizeBody(prize) {
+  if (!physics.world) return null;
+
+  const body = new CANNON.Body({
+    mass: PRIZE_MASS,
+    material: physics.prizeMaterial,
+    linearDamping: 0.62,
+    angularDamping: 0.82,
+    allowSleep: true,
+    sleepSpeedLimit: 0.05,
+    sleepTimeLimit: 0.45,
+  });
+  body.addShape(new CANNON.Box(new CANNON.Vec3(0.28, 0.36, 0.26)));
+  body.position.set(prize.home.x, prize.home.y + PRIZE_BODY_OFFSET_Y, prize.home.z);
+  body.quaternion.setFromEuler(0, random(-0.35, 0.35), 0);
+  physics.world.addBody(body);
+
+  prize.body = body;
+  prize.bodyOffsetY = PRIZE_BODY_OFFSET_Y;
+  prize.holdSpin = 0;
+  syncPrizeVisual(prize);
+  return body;
+}
+
+function syncPrizeVisual(prize) {
+  if (!prize.body) return;
+  prize.object.position.set(
+    prize.body.position.x,
+    prize.body.position.y - (prize.bodyOffsetY || 0),
+    prize.body.position.z,
+  );
+  prize.object.quaternion.set(
+    prize.body.quaternion.x,
+    prize.body.quaternion.y,
+    prize.body.quaternion.z,
+    prize.body.quaternion.w,
+  );
+}
+
+function resetPrizePhysics(prize, rotate = true) {
+  if (!prize.body) return;
+  prize.body.type = CANNON.Body.DYNAMIC;
+  prize.body.mass = PRIZE_MASS;
+  prize.body.collisionResponse = true;
+  prize.body.updateMassProperties();
+  prize.body.position.set(prize.home.x, prize.home.y + (prize.bodyOffsetY || PRIZE_BODY_OFFSET_Y), prize.home.z);
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.force.set(0, 0, 0);
+  prize.body.torque.set(0, 0, 0);
+  prize.body.quaternion.setFromEuler(0, rotate ? random(-0.35, 0.35) : 0, 0);
+  prize.body.wakeUp();
+  prize.holdSpin = 0;
+  syncPrizeVisual(prize);
+}
+
+function capturePrize(prize) {
+  prize.grabbed = true;
+  prize.holdSpin = prize.object.rotation.y || 0;
+  if (!prize.body) return;
+  prize.body.type = CANNON.Body.KINEMATIC;
+  prize.body.mass = 0;
+  prize.body.collisionResponse = false;
+  prize.body.updateMassProperties();
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  syncHeldPrize(prize, 16);
+}
+
+function syncHeldPrize(prize, dt) {
+  if (!prize.body) {
+    prize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
+    prize.object.rotation.y += dt * 0.002;
+    return;
+  }
+
+  const seconds = Math.max(dt / 1000, 1 / 120);
+  const nextX = claw.x;
+  const nextY = claw.y - 0.62 + (prize.bodyOffsetY || PRIZE_BODY_OFFSET_Y);
+  const nextZ = claw.z + 0.04;
+  prize.body.velocity.set(
+    (nextX - prize.body.position.x) / seconds,
+    (nextY - prize.body.position.y) / seconds,
+    (nextZ - prize.body.position.z) / seconds,
+  );
+  prize.body.position.set(nextX, nextY, nextZ);
+  prize.holdSpin = (prize.holdSpin || 0) + dt * 0.002;
+  prize.body.quaternion.setFromEuler(0, prize.holdSpin, 0);
+  syncPrizeVisual(prize);
+}
+
+function releaseGrabbedPrize() {
+  const prize = game.grabbedPrize;
+  if (!prize) return;
+
+  prize.grabbed = false;
+  if (!prize.body) return;
+  prize.body.type = CANNON.Body.DYNAMIC;
+  prize.body.mass = PRIZE_MASS;
+  prize.body.collisionResponse = true;
+  prize.body.updateMassProperties();
+  prize.body.velocity.set(random(-0.35, 0.18), -1.15, random(0.2, 0.7));
+  prize.body.angularVelocity.set(random(-2.2, 2.2), random(-2.4, 2.4), random(-2.2, 2.2));
+  prize.body.wakeUp();
+}
+
+function syncClawCollider(dt) {
+  if (!physics.clawBody) return;
+  const seconds = Math.max(dt / 1000, 1 / 120);
+  const nextX = claw.x;
+  const nextY = claw.y - 0.72;
+  const nextZ = claw.z;
+  physics.clawBody.velocity.set(
+    (nextX - physics.clawBody.position.x) / seconds,
+    (nextY - physics.clawBody.position.y) / seconds,
+    (nextZ - physics.clawBody.position.z) / seconds,
+  );
+  physics.clawBody.position.set(nextX, nextY, nextZ);
+}
+
+function stepPhysics(dt) {
+  if (!physics.world) return;
+  physics.world.step(physics.fixedTimeStep, Math.min(dt / 1000, 0.05), physics.maxSubSteps);
 }
 
 function makeTextSprite(text, options = {}) {
@@ -656,6 +855,7 @@ function resetGame() {
   clearEffects();
   game.result = "未开始";
   game.grabbedPrize = null;
+  game.releaseStarted = false;
   game.palmOpenMs = 0;
   game.fistMs = 0;
   game.calibration = null;
@@ -676,11 +876,10 @@ function resetGame() {
   claw.targetZ = 0;
   claw.closed = 0;
   sceneObjects.prizes.forEach((prize) => {
-    prize.object.position.copy(prize.home);
-    prize.object.rotation.set(0, random(-0.35, 0.35), 0);
     prize.object.visible = true;
     prize.grabbed = false;
     prize.collected = false;
+    resetPrizePhysics(prize);
   });
   updateMessage();
   updateUi();
@@ -731,14 +930,13 @@ function updateState(dt) {
     claw.closed = approach(claw.closed, 1, dt * 0.004);
     if (game.stateTime > 560) {
       game.grabbedPrize = pickPrize();
-      if (game.grabbedPrize) game.grabbedPrize.grabbed = true;
+      if (game.grabbedPrize) capturePrize(game.grabbedPrize);
       setState(STATES.LIFTING);
     }
   } else if (game.state === STATES.LIFTING) {
     claw.targetY = WORLD.clawHomeY;
     if (game.grabbedPrize) {
-      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
-      game.grabbedPrize.object.rotation.y += dt * 0.002;
+      syncHeldPrize(game.grabbedPrize, dt);
     }
     if (Math.abs(claw.y - WORLD.clawHomeY) < 0.05) setState(STATES.RETURNING);
   } else if (game.state === STATES.RETURNING) {
@@ -746,16 +944,17 @@ function updateState(dt) {
     claw.targetZ = WORLD.exit.z - 0.08;
     claw.targetY = WORLD.clawHomeY;
     if (game.grabbedPrize) {
-      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
-      game.grabbedPrize.object.rotation.y += dt * 0.002;
+      syncHeldPrize(game.grabbedPrize, dt);
     }
     if (Math.abs(claw.x - claw.targetX) < 0.07 && Math.abs(claw.z - claw.targetZ) < 0.07) {
+      game.releaseStarted = false;
       setState(STATES.RELEASING);
     }
   } else if (game.state === STATES.RELEASING) {
     claw.closed = approach(claw.closed, 0, dt * 0.0045);
-    if (game.grabbedPrize) {
-      game.grabbedPrize.object.position.lerp(new THREE.Vector3(WORLD.exit.x, 0.38, WORLD.exit.z), 0.16);
+    if (game.grabbedPrize && !game.releaseStarted) {
+      releaseGrabbedPrize();
+      game.releaseStarted = true;
     }
     if (game.stateTime > 760) {
       if (game.grabbedPrize) {
@@ -796,6 +995,7 @@ function resetRoundForReplay() {
   game.calibration = null;
   game.demoActive = false;
   game.demoTime = 0;
+  game.releaseStarted = false;
   game.round += 1;
   input.rawX = 0.5;
   input.rawY = 0.5;
@@ -810,10 +1010,10 @@ function resetRoundForReplay() {
   claw.targetZ = 0;
   claw.closed = 0;
   sceneObjects.prizes.forEach((prize) => {
-    prize.object.position.copy(prize.home);
     prize.object.visible = true;
     prize.grabbed = false;
     prize.collected = false;
+    resetPrizePhysics(prize);
   });
 }
 
@@ -840,24 +1040,26 @@ function updateClaw(dt) {
   const cableLength = Math.max(0.35, WORLD.railY - claw.y);
   sceneObjects.cable.scale.set(1, cableLength, 1);
   sceneObjects.cable.position.set(claw.x, claw.y + cableLength / 2, claw.z);
+  syncClawCollider(dt);
 }
 
 function updatePrizes(now) {
   sceneObjects.prizes.forEach((prize) => {
     if (prize.grabbed || prize.collected || !prize.object.visible) return;
-    prize.object.position.y = prize.home.y + Math.sin(now * 0.0016 + prize.wobble) * 0.035;
-    prize.object.rotation.y += 0.002;
+    if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
+    syncPrizeVisual(prize);
   });
 }
 
 function pickPrize() {
   let best = null;
   let bestDist = Infinity;
-  const grabPoint = new THREE.Vector3(claw.x, WORLD.floorY + 0.48, claw.z);
   sceneObjects.prizes.forEach((prize) => {
     if (prize.collected) return;
-    const dist = prize.object.position.distanceTo(grabPoint);
-    if (dist < prize.radius + 0.42 && dist < bestDist) {
+    const px = prize.body ? prize.body.position.x : prize.object.position.x;
+    const pz = prize.body ? prize.body.position.z : prize.object.position.z;
+    const dist = Math.hypot(px - claw.x, pz - claw.z);
+    if (dist < prize.radius + 0.22 && dist < bestDist) {
       best = prize;
       bestDist = dist;
     }
@@ -976,6 +1178,7 @@ function tick(now) {
 
   updateState(dt);
   updateClaw(dt);
+  stepPhysics(dt);
   updatePrizes(now);
   updateEffects(dt);
   updateUi();
@@ -1028,6 +1231,7 @@ window.__clawDebug = {
       input.y = lerp(input.y, input.rawY, 0.18);
       updateState(dt);
       updateClaw(dt);
+      stepPhysics(dt);
       updatePrizes(performance.now());
       updateEffects(dt);
       updateUi();
@@ -1043,6 +1247,7 @@ window.__clawDebug = {
       canvasPainted: true,
       renderer: "three",
       prizeCount: sceneObjects.prizes.length,
+      physicsBodies: physics.world ? physics.world.bodies.length : 0,
       effectCount: sceneObjects.effects.length,
     };
   },
