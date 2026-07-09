@@ -1,8 +1,9 @@
 import "./styles.css";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const canvas = document.getElementById("game-canvas");
-const ctx = canvas.getContext("2d");
 const video = document.getElementById("camera-video");
 const handOverlay = document.getElementById("hand-overlay");
 const handCtx = handOverlay.getContext("2d");
@@ -41,28 +42,25 @@ const STATE_LABELS = {
   [STATES.RESULT]: "本轮结束",
 };
 
-const machine = {
-  left: 110,
-  top: 80,
-  width: 920,
-  height: 650,
-  playTop: 190,
-  floor: 650,
-  exit: { x: 185, y: 622, w: 150, h: 72 },
+const WORLD = {
+  xMin: -2.85,
+  xMax: 2.85,
+  zMin: -1.7,
+  zMax: 1.75,
+  floorY: 0,
+  clawHomeY: 3.05,
+  clawDropY: 0.92,
+  railY: 4.02,
+  exit: new THREE.Vector3(-2.9, 0.1, 2.02),
 };
 
-const claw = {
-  x: 550,
-  y: 230,
-  targetX: 550,
-  targetY: 230,
-  homeY: 230,
-  minX: machine.left + 120,
-  maxX: machine.left + machine.width - 120,
-  minY: 230,
-  maxY: 480,
-  arm: 60,
-  closed: 0,
+const input = {
+  rawX: 0.5,
+  rawY: 0.5,
+  x: 0.5,
+  y: 0.5,
+  openPalm: false,
+  fist: false,
 };
 
 const game = {
@@ -75,109 +73,389 @@ const game = {
   fistMs: 0,
   calibration: null,
   result: "未开始",
-  grabbedToy: null,
+  grabbedPrize: null,
   demoActive: false,
   demoTime: 0,
+  round: 0,
   keys: new Set(),
 };
 
-const input = {
-  rawX: 0.5,
-  rawY: 0.5,
-  x: 0.5,
-  y: 0.5,
-  openPalm: false,
-  fist: false,
+const claw = {
+  x: 0,
+  y: WORLD.clawHomeY,
+  z: 0,
+  targetX: 0,
+  targetY: WORLD.clawHomeY,
+  targetZ: 0,
+  closed: 0,
 };
 
-const toys = createToys();
+const renderer = new THREE.WebGLRenderer({
+  canvas,
+  antialias: true,
+  powerPreference: "high-performance",
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.08;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f16);
+scene.fog = new THREE.Fog(0x0b0f16, 8, 17);
+
+const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 60);
+camera.position.set(0, 4.65, 8.7);
+
+const loader = new GLTFLoader();
+const sceneObjects = {
+  root: new THREE.Group(),
+  machine: new THREE.Group(),
+  claw: new THREE.Group(),
+  cable: null,
+  fingers: [],
+  prizes: [],
+  prizeModels: [],
+  effects: [],
+  titleSprite: null,
+  messageSprite: null,
+  exitGlow: null,
+};
+
+const mats = {
+  shell: new THREE.MeshStandardMaterial({ color: 0xf8b637, roughness: 0.42, metalness: 0.08 }),
+  shellDark: new THREE.MeshStandardMaterial({ color: 0x32170e, roughness: 0.55, metalness: 0.1 }),
+  trim: new THREE.MeshStandardMaterial({ color: 0xffd776, roughness: 0.35, metalness: 0.18 }),
+  glass: new THREE.MeshPhysicalMaterial({
+    color: 0x8bd8ff,
+    transparent: true,
+    opacity: 0.22,
+    roughness: 0.04,
+    metalness: 0,
+    transmission: 0.16,
+    depthWrite: false,
+  }),
+  floor: new THREE.MeshStandardMaterial({ color: 0x111820, roughness: 0.78, metalness: 0.05 }),
+  rail: new THREE.MeshStandardMaterial({ color: 0xffe3a4, roughness: 0.28, metalness: 0.32 }),
+  clawBody: new THREE.MeshStandardMaterial({ color: 0x3b2416, roughness: 0.45, metalness: 0.18 }),
+  clawMetal: new THREE.MeshStandardMaterial({ color: 0xe9edf0, roughness: 0.24, metalness: 0.42 }),
+  mint: new THREE.MeshStandardMaterial({ color: 0x55efc4, roughness: 0.35, metalness: 0.08, emissive: 0x0b5a46 }),
+  red: new THREE.MeshStandardMaterial({ color: 0xff5f7e, roughness: 0.5, metalness: 0.05, emissive: 0x45111c }),
+  shadow: new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.34 }),
+};
+
+const PRIZE_ASSETS = [
+  "/assets/models/3d/prizes/animal-bunny.glb",
+  "/assets/models/3d/prizes/animal-cat.glb",
+  "/assets/models/3d/prizes/animal-dog.glb",
+  "/assets/models/3d/prizes/animal-panda.glb",
+  "/assets/models/3d/prizes/animal-penguin.glb",
+  "/assets/models/3d/prizes/animal-tiger.glb",
+];
+
 let handLandmarker = null;
 let cameraStarted = false;
 
-function createToys() {
-  const palette = [
-    ["#ffcf5d", "#f07f35"],
-    ["#8cf6c8", "#1e9d78"],
-    ["#9dd2ff", "#3464d8"],
-    ["#ff8aa1", "#cc3856"],
-    ["#d5a7ff", "#7649bd"],
-    ["#fff0a3", "#c18d24"],
-    ["#72f0ff", "#257e96"],
-    ["#ffb06f", "#b14e28"],
-  ];
-  const list = [];
-  for (let row = 0; row < 3; row += 1) {
-    for (let col = 0; col < 4; col += 1) {
-      const idx = row * 4 + col;
-      const x = machine.left + 210 + col * 155 + (row % 2) * 28;
-      const y = machine.floor - 54 - row * 58;
-      const [a, b] = palette[idx % palette.length];
-      list.push({
-        id: `toy-${idx}`,
-        x,
-        y,
-        homeX: x,
-        homeY: y,
-        r: 28 + (idx % 3) * 4,
-        colors: [a, b],
-        grabbed: false,
-        collected: false,
-        wobble: Math.random() * Math.PI * 2,
-      });
-    }
-  }
-  return list;
+scene.add(sceneObjects.root);
+sceneObjects.root.add(sceneObjects.machine);
+buildLights();
+buildMachine();
+buildClaw();
+buildPrizePlaceholders();
+loadPrizeModels();
+resizeRenderer();
+window.addEventListener("resize", resizeRenderer);
+
+function buildLights() {
+  scene.add(new THREE.HemisphereLight(0xb7e6ff, 0x1b120d, 1.6));
+
+  const key = new THREE.DirectionalLight(0xffffff, 2.3);
+  key.position.set(2.8, 6.2, 4.6);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 16;
+  key.shadow.camera.left = -6;
+  key.shadow.camera.right = 6;
+  key.shadow.camera.top = 6;
+  key.shadow.camera.bottom = -6;
+  scene.add(key);
+
+  const warm = new THREE.PointLight(0xffc857, 2.4, 8);
+  warm.position.set(-3.2, 2.6, 2.4);
+  scene.add(warm);
+
+  const cyan = new THREE.PointLight(0x55efc4, 1.8, 7);
+  cyan.position.set(3.2, 2.3, 1.2);
+  scene.add(cyan);
 }
 
-function setState(next) {
-  if (game.state === next) return;
-  game.state = next;
-  game.stateTime = 0;
-  ui.state.textContent = STATE_LABELS[next];
-  window.__clawGameState = game.state;
-}
+function buildMachine() {
+  const m = sceneObjects.machine;
 
-function resetGame() {
-  setState(STATES.IDLE);
-  game.result = "未开始";
-  game.grabbedToy = null;
-  game.palmOpenMs = 0;
-  game.fistMs = 0;
-  game.calibration = null;
-  game.demoActive = false;
-  game.demoTime = 0;
-  input.rawX = 0.5;
-  input.rawY = 0.5;
-  input.x = 0.5;
-  input.y = 0.5;
-  input.openPalm = false;
-  input.fist = false;
-  claw.x = 550;
-  claw.y = claw.homeY;
-  claw.targetX = claw.x;
-  claw.targetY = claw.y;
-  claw.closed = 0;
-  claw.arm = 60;
-  toys.forEach((toy) => {
-    toy.x = toy.homeX;
-    toy.y = toy.homeY;
-    toy.grabbed = false;
-    toy.collected = false;
+  addBox(m, [7.2, 0.28, 5.0], [0, -0.15, 0.2], mats.shellDark, true);
+  addBox(m, [7.7, 0.42, 0.42], [0, 4.18, -1.98], mats.shell, true);
+  addBox(m, [0.42, 4.35, 0.42], [-3.75, 1.92, -1.98], mats.shell, true);
+  addBox(m, [0.42, 4.35, 0.42], [3.75, 1.92, -1.98], mats.shell, true);
+  addBox(m, [7.7, 0.42, 0.42], [0, -0.05, -1.98], mats.shell, true);
+  addBox(m, [7.7, 4.65, 0.18], [0, 2.0, -2.2], mats.shellDark, true);
+
+  addBox(m, [7.55, 0.24, 0.32], [0, 3.66, 2.08], mats.shell, true);
+  addBox(m, [0.24, 3.7, 0.32], [-3.62, 1.82, 2.08], mats.shell, true);
+  addBox(m, [0.24, 3.7, 0.32], [3.62, 1.82, 2.08], mats.shell, true);
+
+  addBox(m, [6.8, 0.08, 4.1], [0, WORLD.floorY, 0], mats.floor, true);
+  addBox(m, [6.2, 0.12, 0.12], [0, WORLD.railY, 0.05], mats.rail, true);
+  addBox(m, [0.16, 0.16, 3.8], [-3.08, WORLD.railY - 0.04, 0], mats.rail, true);
+  addBox(m, [0.16, 0.16, 3.8], [3.08, WORLD.railY - 0.04, 0], mats.rail, true);
+
+  addGlassPanel([0, 2.0, 2.0], [6.85, 3.45, 0.04]);
+  addGlassPanel([-3.45, 2.0, 0], [0.04, 3.45, 3.95]);
+  addGlassPanel([3.45, 2.0, 0], [0.04, 3.45, 3.95]);
+
+  addBox(m, [5.0, 0.38, 0.22], [0, 4.5, 2.12], mats.shellDark, false);
+  sceneObjects.titleSprite = makeTextSprite("LUCKY HAND CLAW", {
+    fontSize: 64,
+    color: "#fff7e6",
+    bg: "rgba(20, 10, 8, 0)",
+    width: 760,
+    height: 130,
   });
-  updateUi();
+  sceneObjects.titleSprite.position.set(0, 4.51, 2.0);
+  sceneObjects.titleSprite.scale.set(3.7, 0.62, 1);
+  m.add(sceneObjects.titleSprite);
+
+  for (let i = 0; i < 14; i += 1) {
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.055, 14, 14),
+      i % 2 ? mats.red : mats.mint,
+    );
+    bulb.position.set(-2.85 + i * 0.44, 4.52, 2.23);
+    m.add(bulb);
+  }
+
+  const exit = new THREE.Group();
+  exit.position.copy(WORLD.exit);
+  addBox(exit, [1.18, 0.18, 0.74], [0, 0.03, 0], mats.shellDark, true);
+  addBox(exit, [0.88, 0.08, 0.48], [0, 0.14, 0.02], mats.mint, false);
+  sceneObjects.exitGlow = new THREE.PointLight(0x55efc4, 1.2, 2.4);
+  sceneObjects.exitGlow.position.set(0, 0.38, 0.08);
+  exit.add(sceneObjects.exitGlow);
+  m.add(exit);
+
+  const chuteLabel = makeTextSprite("PRIZE", {
+    fontSize: 64,
+    color: "#55efc4",
+    bg: "rgba(0,0,0,0)",
+    width: 360,
+    height: 120,
+  });
+  chuteLabel.position.set(WORLD.exit.x, 0.55, WORLD.exit.z + 0.3);
+  chuteLabel.scale.set(0.82, 0.26, 1);
+  m.add(chuteLabel);
+
+  const groundShadow = new THREE.Mesh(new THREE.CircleGeometry(4.6, 48), mats.shadow);
+  groundShadow.rotation.x = -Math.PI / 2;
+  groundShadow.position.set(0, -0.13, 0.15);
+  m.add(groundShadow);
 }
 
-function updateUi() {
-  ui.state.textContent = STATE_LABELS[game.state];
-  ui.input.textContent = game.demoActive
-    ? "自动演示"
-    : game.inputMode === "camera"
-      ? "摄像头"
-      : "键盘调试";
-  ui.gesture.textContent = input.fist ? "攥拳" : input.openPalm ? "张开手掌" : game.handPresent ? "手已入镜" : "未检测";
-  ui.result.textContent = game.result;
-  ui.meterX.value = input.x;
-  ui.meterY.value = input.y;
+function addGlassPanel(position, size) {
+  const glass = addBox(sceneObjects.machine, size, position, mats.glass, false);
+  glass.renderOrder = 2;
+  return glass;
+}
+
+function buildClaw() {
+  const group = sceneObjects.claw;
+  sceneObjects.machine.add(group);
+
+  const hub = addBox(group, [0.62, 0.38, 0.62], [0, 0, 0], mats.clawBody, true);
+  hub.name = "claw-hub";
+
+  sceneObjects.cable = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.035, 1, 12),
+    mats.rail,
+  );
+  sceneObjects.cable.castShadow = true;
+  sceneObjects.machine.add(sceneObjects.cable);
+
+  for (let i = 0; i < 3; i += 1) {
+    const finger = new THREE.Group();
+    const angle = i * (Math.PI * 2 / 3) + Math.PI / 6;
+    finger.userData.baseAngle = angle;
+
+    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.68, 8, 12), mats.clawMetal);
+    upper.rotation.x = 0.5;
+    upper.position.set(0, -0.45, 0.18);
+    upper.castShadow = true;
+    finger.add(upper);
+
+    const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.36, 8, 12), mats.clawMetal);
+    tip.rotation.x = -0.5;
+    tip.position.set(0, -0.9, 0.32);
+    tip.castShadow = true;
+    finger.add(tip);
+
+    finger.rotation.y = angle;
+    finger.position.set(Math.cos(angle) * 0.18, -0.12, Math.sin(angle) * 0.18);
+    group.add(finger);
+    sceneObjects.fingers.push(finger);
+  }
+}
+
+function buildPrizePlaceholders() {
+  const positions = [
+    [-2.05, 0, -0.92],
+    [-0.75, 0, -1.08],
+    [0.75, 0, -0.94],
+    [2.0, 0, -1.04],
+    [-2.25, 0, 0.18],
+    [-0.55, 0, 0.12],
+    [0.9, 0, 0.18],
+    [2.15, 0, 0.1],
+    [-1.65, 0, 1.05],
+    [0.18, 0, 1.05],
+  ];
+
+  positions.forEach((pos, index) => {
+    const color = [0xff9f43, 0x55efc4, 0x73d2ff, 0xff5f7e, 0xd5a7ff, 0xffd776][index % 6];
+    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.58, metalness: 0.02 });
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.36, 24, 18), material);
+    mesh.scale.set(0.9, 1.08, 0.86);
+    mesh.position.set(pos[0], 0.42, pos[2]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    sceneObjects.machine.add(mesh);
+
+    sceneObjects.prizes.push({
+      id: `prize-${index}`,
+      object: mesh,
+      home: mesh.position.clone(),
+      radius: 0.46,
+      grabbed: false,
+      collected: false,
+      wobble: Math.random() * Math.PI * 2,
+    });
+  });
+}
+
+async function loadPrizeModels() {
+  const selected = sceneObjects.prizes.slice(0, PRIZE_ASSETS.length);
+  await Promise.allSettled(
+    selected.map(async (prize, index) => {
+      const gltf = await loader.loadAsync(PRIZE_ASSETS[index]);
+      const model = gltf.scene;
+      normalizeModel(model, 0.82);
+      model.position.copy(prize.object.position);
+      model.rotation.y = random(-0.4, 0.4);
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      sceneObjects.machine.add(model);
+      sceneObjects.machine.remove(prize.object);
+      prize.object = model;
+      prize.home = model.position.clone();
+      prize.radius = 0.5;
+    }),
+  );
+}
+
+function normalizeModel(model, targetHeight) {
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = targetHeight / Math.max(size.y, 0.001);
+  model.scale.multiplyScalar(scale);
+  const nextBox = new THREE.Box3().setFromObject(model);
+  const center = nextBox.getCenter(new THREE.Vector3());
+  model.position.sub(center);
+  model.position.y += targetHeight / 2;
+}
+
+function addBox(parent, size, position, material, castShadow) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+  mesh.position.set(position[0], position[1], position[2]);
+  mesh.castShadow = castShadow;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+function makeTextSprite(text, options = {}) {
+  const width = options.width || 640;
+  const height = options.height || 180;
+  const cnv = document.createElement("canvas");
+  cnv.width = width;
+  cnv.height = height;
+  const c = cnv.getContext("2d");
+  c.clearRect(0, 0, width, height);
+  if (options.bg) {
+    c.fillStyle = options.bg;
+    c.fillRect(0, 0, width, height);
+  }
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillStyle = options.color || "#fff7e6";
+  c.font = `900 ${options.fontSize || 76}px Trebuchet MS, Microsoft YaHei, sans-serif`;
+  c.fillText(text, width / 2, height / 2);
+
+  const texture = new THREE.CanvasTexture(cnv);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.userData.texture = texture;
+  return sprite;
+}
+
+function setMessage(text, subtext) {
+  if (sceneObjects.messageSprite) {
+    sceneObjects.machine.remove(sceneObjects.messageSprite);
+    sceneObjects.messageSprite.material.map.dispose();
+    sceneObjects.messageSprite.material.dispose();
+  }
+
+  const cnv = document.createElement("canvas");
+  cnv.width = 920;
+  cnv.height = 300;
+  const c = cnv.getContext("2d");
+  c.fillStyle = "rgba(5, 9, 12, 0.78)";
+  roundedCanvasRect(c, 0, 0, cnv.width, cnv.height, 34);
+  c.fill();
+  c.strokeStyle = "rgba(255, 247, 230, 0.18)";
+  c.lineWidth = 3;
+  c.stroke();
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillStyle = "#fff7e6";
+  c.font = "900 88px Trebuchet MS, Microsoft YaHei, sans-serif";
+  c.fillText(text, cnv.width / 2, 118);
+  c.fillStyle = "#ffc857";
+  c.font = "700 42px Trebuchet MS, Microsoft YaHei, sans-serif";
+  c.fillText(subtext, cnv.width / 2, 210);
+
+  const texture = new THREE.CanvasTexture(cnv);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+  sprite.scale.set(4.2, 1.36, 1);
+  sprite.position.set(0, 2.22, 2.16);
+  sprite.renderOrder = 20;
+  sceneObjects.messageSprite = sprite;
+  sceneObjects.machine.add(sprite);
+}
+
+function roundedCanvasRect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
 }
 
 async function initCameraAndModel() {
@@ -242,6 +520,10 @@ function classifyHand(lm) {
   };
 }
 
+function toMirroredPalmCenter(palmCenter) {
+  return { x: 1 - palmCenter.x, y: palmCenter.y };
+}
+
 function readCameraInput() {
   if (!handLandmarker || !cameraStarted || video.readyState < 2) return;
   const result = handLandmarker.detectForVideo(video, performance.now());
@@ -256,40 +538,38 @@ function readCameraInput() {
 
   const lm = result.landmarks[0];
   const hand = classifyHand(lm);
+  const mirroredPalmCenter = toMirroredPalmCenter(hand.palmCenter);
   game.handPresent = true;
   input.openPalm = hand.openPalm;
   input.fist = hand.fist;
 
   if (!game.calibration && game.state === STATES.CONTROLLING) {
     game.calibration = {
-      x: hand.palmCenter.x,
-      y: hand.palmCenter.y,
+      x: mirroredPalmCenter.x,
+      y: mirroredPalmCenter.y,
       scale: hand.palmScale || 0.16,
     };
   }
 
   if (game.calibration) {
-    const dx = (hand.palmCenter.x - game.calibration.x) * 2.4;
-    const dy = (hand.palmCenter.y - game.calibration.y) * 2.2;
+    const dx = (mirroredPalmCenter.x - game.calibration.x) * 2.4;
+    const dz = (mirroredPalmCenter.y - game.calibration.y) * 2.2;
     const scaleDelta = ((game.calibration.scale || 0.16) - hand.palmScale) * 2.4;
     input.rawX = clamp(0.5 + dx, 0, 1);
-    input.rawY = clamp(0.5 + dy + scaleDelta, 0, 1);
+    input.rawY = clamp(0.5 + dz + scaleDelta, 0, 1);
   }
 
   drawHandOverlay(lm);
 }
 
 function drawHandOverlay(lm) {
-  handCtx.save();
-  handCtx.scale(-1, 1);
-  handCtx.translate(-handOverlay.width, 0);
+  handCtx.clearRect(0, 0, handOverlay.width, handOverlay.height);
   handCtx.fillStyle = "rgba(88, 242, 184, 0.9)";
   lm.forEach((p) => {
     handCtx.beginPath();
     handCtx.arc(p.x * handOverlay.width, p.y * handOverlay.height, 3, 0, Math.PI * 2);
     handCtx.fill();
   });
-  handCtx.restore();
 }
 
 function readDebugInput(dt) {
@@ -300,7 +580,7 @@ function readDebugInput(dt) {
   if (game.keys.has("ArrowDown") || game.keys.has("KeyS")) input.rawY += speed;
   input.rawX = clamp(input.rawX, 0, 1);
   input.rawY = clamp(input.rawY, 0, 1);
-  input.openPalm = game.state === STATES.IDLE && game.keys.has("Enter");
+  input.openPalm = (game.state === STATES.IDLE || game.state === STATES.RESULT) && game.keys.has("Enter");
   input.fist = game.keys.has("Space");
 }
 
@@ -308,15 +588,85 @@ function readDemoInput(dt) {
   game.demoTime += dt;
   const t = game.demoTime;
   input.openPalm = t < 1250;
-  input.fist = t > 3100 && t < 3800;
+  input.fist = t > 2500 && t < 3300;
 
   if (t < 1250) {
     input.rawX = 0.5;
     input.rawY = 0.5;
-  } else if (t < 3100) {
-    const u = (t - 1250) / 1850;
-    input.rawX = lerp(0.5, 0.43, easeInOut(u));
-    input.rawY = lerp(0.5, 0.77, easeInOut(u));
+  } else if (t < 2500) {
+    const u = (t - 1250) / 1250;
+    input.rawX = lerp(0.5, 0.47, easeInOut(u));
+    input.rawY = lerp(0.5, 0.72, easeInOut(u));
+  }
+}
+
+function setState(next) {
+  if (game.state === next) return;
+  game.state = next;
+  game.stateTime = 0;
+  ui.state.textContent = STATE_LABELS[next];
+  window.__clawGameState = game.state;
+  updateMessage();
+}
+
+function resetGame() {
+  setState(STATES.IDLE);
+  clearEffects();
+  game.result = "未开始";
+  game.grabbedPrize = null;
+  game.palmOpenMs = 0;
+  game.fistMs = 0;
+  game.calibration = null;
+  game.demoActive = false;
+  game.demoTime = 0;
+  game.round += 1;
+  input.rawX = 0.5;
+  input.rawY = 0.5;
+  input.x = 0.5;
+  input.y = 0.5;
+  input.openPalm = false;
+  input.fist = false;
+  claw.x = 0;
+  claw.y = WORLD.clawHomeY;
+  claw.z = 0;
+  claw.targetX = 0;
+  claw.targetY = WORLD.clawHomeY;
+  claw.targetZ = 0;
+  claw.closed = 0;
+  sceneObjects.prizes.forEach((prize) => {
+    prize.object.position.copy(prize.home);
+    prize.object.rotation.set(0, random(-0.35, 0.35), 0);
+    prize.object.visible = true;
+    prize.grabbed = false;
+    prize.collected = false;
+  });
+  updateMessage();
+  updateUi();
+}
+
+function updateUi() {
+  ui.state.textContent = STATE_LABELS[game.state];
+  ui.input.textContent = game.demoActive
+    ? "自动演示"
+    : game.inputMode === "camera"
+      ? "摄像头"
+      : "键盘调试";
+  ui.gesture.textContent = input.fist ? "攥拳" : input.openPalm ? "张开手掌" : game.handPresent ? "手已入镜" : "未检测";
+  ui.result.textContent = game.result;
+  ui.meterX.value = input.x;
+  ui.meterY.value = input.y;
+}
+
+function updateMessage() {
+  if (game.state === STATES.IDLE) {
+    setMessage("张开手掌开始", "或按 Enter 使用调试模式");
+  } else if (game.state === STATES.RESULT) {
+    setMessage(game.result, "张开手掌或按 Enter 再来一局");
+  } else if (sceneObjects.messageSprite) {
+    sceneObjects.machine.remove(sceneObjects.messageSprite);
+    sceneObjects.messageSprite.material.map.dispose();
+    sceneObjects.messageSprite.material.dispose();
+    sceneObjects.messageSprite = null;
   }
 }
 
@@ -324,12 +674,7 @@ function updateState(dt) {
   game.stateTime += dt;
 
   if (game.state === STATES.IDLE) {
-    game.palmOpenMs = input.openPalm ? game.palmOpenMs + dt : 0;
-    if (game.palmOpenMs >= 900) {
-      game.result = "游戏中";
-      game.calibration = null;
-      setState(STATES.CONTROLLING);
-    }
+    updateStartGesture(dt, 900, false);
   } else if (game.state === STATES.CONTROLLING) {
     game.fistMs = input.fist ? game.fistMs + dt : 0;
     if (game.fistMs >= 280) {
@@ -337,82 +682,247 @@ function updateState(dt) {
       setState(STATES.DROPPING);
     }
   } else if (game.state === STATES.DROPPING) {
-    claw.targetY = claw.maxY;
+    claw.targetY = WORLD.clawDropY;
     claw.closed = approach(claw.closed, 0.2, dt * 0.006);
-    if (Math.abs(claw.y - claw.maxY) < 4) setState(STATES.GRABBING);
+    if (Math.abs(claw.y - WORLD.clawDropY) < 0.05) setState(STATES.GRABBING);
   } else if (game.state === STATES.GRABBING) {
     claw.closed = approach(claw.closed, 1, dt * 0.004);
-    if (game.stateTime > 520) {
-      game.grabbedToy = pickToy();
-      if (game.grabbedToy) game.grabbedToy.grabbed = true;
+    if (game.stateTime > 560) {
+      game.grabbedPrize = pickPrize();
+      if (game.grabbedPrize) game.grabbedPrize.grabbed = true;
       setState(STATES.LIFTING);
     }
   } else if (game.state === STATES.LIFTING) {
-    claw.targetY = claw.homeY;
-    if (game.grabbedToy) {
-      game.grabbedToy.x = claw.x;
-      game.grabbedToy.y = claw.y + 74;
+    claw.targetY = WORLD.clawHomeY;
+    if (game.grabbedPrize) {
+      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.82, claw.z + 0.04);
+      game.grabbedPrize.object.rotation.y += dt * 0.002;
     }
-    if (Math.abs(claw.y - claw.homeY) < 4) setState(STATES.RETURNING);
+    if (Math.abs(claw.y - WORLD.clawHomeY) < 0.05) setState(STATES.RETURNING);
   } else if (game.state === STATES.RETURNING) {
-    claw.targetX = machine.exit.x + machine.exit.w / 2;
-    claw.targetY = claw.homeY;
-    if (game.grabbedToy) {
-      game.grabbedToy.x = claw.x;
-      game.grabbedToy.y = claw.y + 74;
+    claw.targetX = WORLD.exit.x;
+    claw.targetZ = WORLD.exit.z - 0.08;
+    claw.targetY = WORLD.clawHomeY;
+    if (game.grabbedPrize) {
+      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.82, claw.z + 0.04);
+      game.grabbedPrize.object.rotation.y += dt * 0.002;
     }
-    if (Math.abs(claw.x - claw.targetX) < 5) setState(STATES.RELEASING);
+    if (Math.abs(claw.x - claw.targetX) < 0.07 && Math.abs(claw.z - claw.targetZ) < 0.07) {
+      setState(STATES.RELEASING);
+    }
   } else if (game.state === STATES.RELEASING) {
     claw.closed = approach(claw.closed, 0, dt * 0.0045);
-    if (game.grabbedToy) {
-      game.grabbedToy.x = lerp(game.grabbedToy.x, machine.exit.x + machine.exit.w / 2, 0.18);
-      game.grabbedToy.y = lerp(game.grabbedToy.y, machine.exit.y + 18, 0.18);
+    if (game.grabbedPrize) {
+      game.grabbedPrize.object.position.lerp(new THREE.Vector3(WORLD.exit.x, 0.38, WORLD.exit.z), 0.16);
     }
-    if (game.stateTime > 720) {
-      if (game.grabbedToy) {
-        game.grabbedToy.collected = true;
+    if (game.stateTime > 760) {
+      if (game.grabbedPrize) {
+        game.grabbedPrize.collected = true;
+        game.grabbedPrize.object.visible = false;
         game.result = "抓到了";
+        triggerResultEffect("success");
       } else {
         game.result = "差一点";
+        triggerResultEffect("miss");
       }
+      game.demoActive = false;
       setState(STATES.RESULT);
     }
   } else if (game.state === STATES.RESULT) {
-    claw.targetX = 550;
-    claw.targetY = claw.homeY;
+    claw.targetX = 0;
+    claw.targetY = WORLD.clawHomeY;
+    claw.targetZ = 0;
+    updateStartGesture(dt, 1000, true);
   }
+}
+
+function updateStartGesture(dt, holdMs, shouldResetRound) {
+  game.palmOpenMs = input.openPalm ? game.palmOpenMs + dt : 0;
+  if (game.palmOpenMs < holdMs || (shouldResetRound && game.stateTime < 900)) return;
+
+  if (shouldResetRound) resetRoundForReplay();
+  game.result = "游戏中";
+  game.calibration = null;
+  game.palmOpenMs = 0;
+  setState(STATES.CONTROLLING);
+}
+
+function resetRoundForReplay() {
+  clearEffects();
+  game.grabbedPrize = null;
+  game.fistMs = 0;
+  game.calibration = null;
+  game.demoActive = false;
+  game.demoTime = 0;
+  game.round += 1;
+  input.rawX = 0.5;
+  input.rawY = 0.5;
+  input.x = 0.5;
+  input.y = 0.5;
+  input.fist = false;
+  claw.x = 0;
+  claw.y = WORLD.clawHomeY;
+  claw.z = 0;
+  claw.targetX = 0;
+  claw.targetY = WORLD.clawHomeY;
+  claw.targetZ = 0;
+  claw.closed = 0;
+  sceneObjects.prizes.forEach((prize) => {
+    prize.object.position.copy(prize.home);
+    prize.object.visible = true;
+    prize.grabbed = false;
+    prize.collected = false;
+  });
 }
 
 function updateClaw(dt) {
   if (game.state === STATES.CONTROLLING) {
-    claw.targetX = map(input.x, 0, 1, claw.minX, claw.maxX);
-    claw.targetY = map(input.y, 0, 1, claw.minY, claw.maxY - 85);
+    claw.targetX = map(input.x, 0, 1, WORLD.xMin, WORLD.xMax);
+    claw.targetZ = map(input.y, 0, 1, WORLD.zMin, WORLD.zMax);
+    claw.targetY = WORLD.clawHomeY;
     claw.closed = approach(claw.closed, 0, dt * 0.004);
   }
 
-  claw.x = lerp(claw.x, claw.targetX, 1 - Math.pow(0.0015, dt / 1000));
-  claw.y = lerp(claw.y, claw.targetY, 1 - Math.pow(0.002, dt / 1000));
-  claw.arm = Math.max(60, claw.y - machine.top - 25);
+  const follow = 1 - Math.pow(0.002, dt / 1000);
+  claw.x = lerp(claw.x, claw.targetX, follow);
+  claw.y = lerp(claw.y, claw.targetY, follow);
+  claw.z = lerp(claw.z, claw.targetZ, follow);
+
+  sceneObjects.claw.position.set(claw.x, claw.y, claw.z);
+  sceneObjects.fingers.forEach((finger) => {
+    const spread = lerp(0.55, 0.18, claw.closed);
+    finger.position.set(Math.cos(finger.userData.baseAngle) * spread, -0.08, Math.sin(finger.userData.baseAngle) * spread);
+    finger.rotation.z = lerp(0.24, -0.12, claw.closed);
+  });
+
+  const cableLength = Math.max(0.35, WORLD.railY - claw.y);
+  sceneObjects.cable.scale.set(1, cableLength, 1);
+  sceneObjects.cable.position.set(claw.x, claw.y + cableLength / 2, claw.z);
 }
 
-function pickToy() {
+function updatePrizes(now) {
+  sceneObjects.prizes.forEach((prize) => {
+    if (prize.grabbed || prize.collected || !prize.object.visible) return;
+    prize.object.position.y = prize.home.y + Math.sin(now * 0.0016 + prize.wobble) * 0.035;
+    prize.object.rotation.y += 0.002;
+  });
+}
+
+function pickPrize() {
   let best = null;
   let bestDist = Infinity;
-  toys.forEach((toy) => {
-    if (toy.collected) return;
-    const dx = toy.x - claw.x;
-    const dy = toy.y - (claw.y + 88);
-    const dist = Math.hypot(dx, dy);
-    if (dist < toy.r + 34 && dist < bestDist) {
-      best = toy;
+  const grabPoint = new THREE.Vector3(claw.x, WORLD.floorY + 0.48, claw.z);
+  sceneObjects.prizes.forEach((prize) => {
+    if (prize.collected) return;
+    const dist = prize.object.position.distanceTo(grabPoint);
+    if (dist < prize.radius + 0.42 && dist < bestDist) {
+      best = prize;
       bestDist = dist;
     }
   });
   return best;
 }
 
+function triggerResultEffect(outcome) {
+  clearEffects();
+  if (outcome === "success") {
+    spawnConfetti(WORLD.exit.x, 1.0, WORLD.exit.z, 80, 1.15);
+    spawnConfetti(0, 4.28, 1.5, 42, 0.8);
+  } else {
+    spawnMissSparks(claw.x, claw.y - 0.9, claw.z, 64);
+  }
+}
+
+function spawnConfetti(x, y, z, count, force) {
+  const colors = [0xff5f7e, 0xffc857, 0x55efc4, 0x73d2ff, 0xd5a7ff, 0xfff7e6];
+  for (let i = 0; i < count; i += 1) {
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(random(0.035, 0.08), random(0.012, 0.028), random(0.018, 0.05)),
+      new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.45, metalness: 0.05 }),
+    );
+    mesh.position.set(x, y, z);
+    mesh.rotation.set(random(0, Math.PI), random(0, Math.PI), random(0, Math.PI));
+    mesh.userData.effect = {
+      type: "confetti",
+      life: random(1300, 2200),
+      maxLife: 2200,
+      velocity: new THREE.Vector3(random(-0.006, 0.006) * force, random(0.006, 0.018) * force, random(-0.009, 0.009) * force),
+      spin: new THREE.Vector3(random(-0.02, 0.02), random(-0.02, 0.02), random(-0.02, 0.02)),
+      gravity: 0.00003,
+    };
+    sceneObjects.machine.add(mesh);
+    sceneObjects.effects.push(mesh);
+  }
+}
+
+function spawnMissSparks(x, y, z, count) {
+  const colors = [0x6f7f8f, 0x9aa7b4, 0x73d2ff, 0xff5f7e];
+  for (let i = 0; i < count; i += 1) {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(random(0.025, 0.06), 10, 8),
+      new THREE.MeshStandardMaterial({ color: colors[i % colors.length], roughness: 0.7, metalness: 0.02 }),
+    );
+    mesh.position.set(x, y, z);
+    mesh.userData.effect = {
+      type: "miss",
+      life: random(720, 1280),
+      maxLife: 1280,
+      velocity: new THREE.Vector3(random(-0.004, 0.004), random(-0.005, 0.003), random(-0.006, 0.006)),
+      spin: new THREE.Vector3(0, 0, 0),
+      gravity: 0.000035,
+    };
+    sceneObjects.machine.add(mesh);
+    sceneObjects.effects.push(mesh);
+  }
+}
+
+function clearEffects() {
+  sceneObjects.effects.forEach((effect) => {
+    sceneObjects.machine.remove(effect);
+    effect.geometry.dispose();
+    effect.material.dispose();
+  });
+  sceneObjects.effects = [];
+}
+
+function updateEffects(dt) {
+  sceneObjects.effects.forEach((effect) => {
+    const data = effect.userData.effect;
+    data.life -= dt;
+    data.velocity.y -= data.gravity * dt;
+    effect.position.addScaledVector(data.velocity, dt);
+    effect.rotation.x += data.spin.x * dt;
+    effect.rotation.y += data.spin.y * dt;
+    effect.rotation.z += data.spin.z * dt;
+    const alpha = clamp(data.life / data.maxLife, 0, 1);
+    effect.scale.setScalar(Math.max(0.1, alpha));
+  });
+
+  sceneObjects.effects = sceneObjects.effects.filter((effect) => {
+    if (effect.userData.effect.life > 0) return true;
+    sceneObjects.machine.remove(effect);
+    effect.geometry.dispose();
+    effect.material.dispose();
+    return false;
+  });
+}
+
+function resizeRenderer() {
+  const width = Math.max(1, canvas.clientWidth);
+  const height = Math.max(1, canvas.clientHeight);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+function render(now) {
+  camera.lookAt(0, 1.85, 0.08);
+  if (sceneObjects.exitGlow) sceneObjects.exitGlow.intensity = 1.1 + Math.sin(now * 0.006) * 0.35;
+  renderer.render(scene, camera);
+}
+
 function tick(now) {
-  const dt = Math.min(40, now - game.lastTime);
+  const dt = Math.min(180, now - game.lastTime || 16);
   game.lastTime = now;
 
   if (game.inputMode === "camera") readCameraInput();
@@ -424,161 +934,11 @@ function tick(now) {
 
   updateState(dt);
   updateClaw(dt);
-  draw(now);
+  updatePrizes(now);
+  updateEffects(dt);
   updateUi();
+  render(now);
   requestAnimationFrame(tick);
-}
-
-function draw(now) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawBackground();
-  drawMachine();
-  drawToys(now);
-  drawClaw();
-  drawOverlayText();
-}
-
-function drawBackground() {
-  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0, "#19120e");
-  grad.addColorStop(0.45, "#2d1a12");
-  grad.addColorStop(1, "#08090c");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "rgba(255, 196, 77, 0.08)";
-  for (let i = 0; i < 18; i += 1) {
-    ctx.fillRect(64 + i * 70, 34 + (i % 3) * 8, 34, 6);
-  }
-}
-
-function drawMachine() {
-  ctx.save();
-  roundedRect(machine.left, machine.top, machine.width, machine.height, 18, "#f0b641", "#4a2818", 8);
-  roundedRect(machine.left + 42, machine.top + 86, machine.width - 84, machine.height - 182, 12, "#111820", "#ffe2a3", 5);
-
-  const glass = ctx.createLinearGradient(0, machine.top + 90, 0, machine.floor);
-  glass.addColorStop(0, "rgba(81, 212, 255, 0.17)");
-  glass.addColorStop(1, "rgba(255, 255, 255, 0.03)");
-  ctx.fillStyle = glass;
-  ctx.fillRect(machine.left + 48, machine.top + 92, machine.width - 96, machine.height - 194);
-
-  ctx.fillStyle = "#28150d";
-  ctx.fillRect(machine.left + 58, machine.floor, machine.width - 116, 46);
-
-  roundedRect(machine.exit.x, machine.exit.y, machine.exit.w, machine.exit.h, 8, "#111114", "#58f2b8", 4);
-  ctx.fillStyle = "#58f2b8";
-  ctx.font = "bold 22px Trebuchet MS";
-  ctx.fillText("出口", machine.exit.x + 54, machine.exit.y + 46);
-
-  ctx.fillStyle = "#2b180e";
-  ctx.fillRect(machine.left + 82, machine.top + 42, machine.width - 164, 34);
-  ctx.fillStyle = "#fff4d6";
-  ctx.font = "900 34px Trebuchet MS";
-  ctx.fillText("HAND CLAW", machine.left + 335, machine.top + 69);
-  ctx.restore();
-}
-
-function drawToys(now) {
-  toys.forEach((toy) => {
-    if (toy.collected) return;
-    const y = toy.grabbed ? toy.y : toy.y + Math.sin(now / 500 + toy.wobble) * 2;
-    drawToy(toy.x, y, toy.r, toy.colors);
-  });
-}
-
-function drawToy(x, y, r, colors) {
-  const grad = ctx.createRadialGradient(x - r * 0.35, y - r * 0.45, r * 0.2, x, y, r * 1.2);
-  grad.addColorStop(0, colors[0]);
-  grad.addColorStop(1, colors[1]);
-  ctx.fillStyle = "rgba(0,0,0,0.28)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + r + 11, r * 0.85, r * 0.24, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(x - r * 0.55, y - r * 0.7, r * 0.34, 0, Math.PI * 2);
-  ctx.arc(x + r * 0.55, y - r * 0.7, r * 0.34, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = "#171311";
-  ctx.beginPath();
-  ctx.arc(x - r * 0.32, y - r * 0.08, r * 0.09, 0, Math.PI * 2);
-  ctx.arc(x + r * 0.32, y - r * 0.08, r * 0.09, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#171311";
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(x, y + r * 0.1, r * 0.24, 0.2, Math.PI - 0.2);
-  ctx.stroke();
-}
-
-function drawClaw() {
-  ctx.save();
-  ctx.strokeStyle = "#ffe4a6";
-  ctx.lineWidth = 9;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(claw.x, machine.top + 78);
-  ctx.lineTo(claw.x, claw.y);
-  ctx.stroke();
-
-  roundedRect(claw.x - 42, claw.y - 24, 84, 40, 8, "#3b2a1b", "#ffc44d", 4);
-
-  const spread = lerp(42, 18, claw.closed);
-  ctx.strokeStyle = "#e9edf0";
-  ctx.lineWidth = 10;
-  ctx.beginPath();
-  ctx.moveTo(claw.x - 18, claw.y + 10);
-  ctx.quadraticCurveTo(claw.x - spread, claw.y + 54, claw.x - spread * 0.82, claw.y + 94);
-  ctx.moveTo(claw.x + 18, claw.y + 10);
-  ctx.quadraticCurveTo(claw.x + spread, claw.y + 54, claw.x + spread * 0.82, claw.y + 94);
-  ctx.moveTo(claw.x, claw.y + 14);
-  ctx.quadraticCurveTo(claw.x, claw.y + 62, claw.x, claw.y + 98);
-  ctx.stroke();
-
-  ctx.strokeStyle = "#ff5b3f";
-  ctx.lineWidth = 4;
-  ctx.beginPath();
-  ctx.arc(claw.x, claw.y + 92, 32, 0.1, Math.PI - 0.1);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawOverlayText() {
-  if (game.state !== STATES.IDLE && game.state !== STATES.RESULT) return;
-  ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.56)";
-  ctx.fillRect(machine.left + 110, machine.top + 210, machine.width - 220, 146);
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#fff4d6";
-  ctx.font = "900 46px Trebuchet MS";
-  ctx.fillText(game.state === STATES.IDLE ? "张开手掌或按 Enter 开始" : game.result, machine.left + machine.width / 2, machine.top + 272);
-  ctx.fillStyle = "#ffc44d";
-  ctx.font = "bold 22px Trebuchet MS";
-  ctx.fillText(game.state === STATES.IDLE ? "无摄像头也可以用调试键盘完成验证" : "按重置或自动演示再来一局", machine.left + machine.width / 2, machine.top + 318);
-  ctx.restore();
-}
-
-function roundedRect(x, y, w, h, r, fill, stroke, lineWidth = 1) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-  if (stroke) {
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = lineWidth;
-    ctx.stroke();
-  }
 }
 
 function clamp(value, min, max) {
@@ -591,6 +951,10 @@ function lerp(a, b, t) {
 
 function map(value, inMin, inMax, outMin, outMax) {
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
+}
+
+function random(min, max) {
+  return min + Math.random() * (max - min);
 }
 
 function approach(current, target, step) {
@@ -611,12 +975,33 @@ window.__clawDebug = {
     game.demoTime = 0;
     ui.cameraMessage.textContent = "自动演示正在生成模拟手势轨迹。";
   },
+  advance(ms, step = 100) {
+    const frames = Math.ceil(ms / step);
+    for (let i = 0; i < frames; i += 1) {
+      const dt = Math.min(180, step);
+      if (game.inputMode === "camera") readCameraInput();
+      if (game.demoActive) readDemoInput(dt);
+      else if (game.inputMode !== "camera") readDebugInput(dt);
+      input.x = lerp(input.x, input.rawX, 0.18);
+      input.y = lerp(input.y, input.rawY, 0.18);
+      updateState(dt);
+      updateClaw(dt);
+      updatePrizes(performance.now());
+      updateEffects(dt);
+      updateUi();
+    }
+    render(performance.now());
+  },
   getState() {
     return {
       state: game.state,
       result: game.result,
       inputMode: game.inputMode,
+      round: game.round,
       canvasPainted: true,
+      renderer: "three",
+      prizeCount: sceneObjects.prizes.length,
+      effectCount: sceneObjects.effects.length,
     };
   },
 };

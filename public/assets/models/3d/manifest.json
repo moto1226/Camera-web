@@ -1,0 +1,104 @@
+{
+  "prizes": [
+    {
+      "id": "bunny",
+      "label": "Bunny",
+      "path": "/assets/models/3d/prizes/animal-bunny.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "cat",
+      "label": "Cat",
+      "path": "/assets/models/3d/prizes/animal-cat.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "dog",
+      "label": "Dog",
+      "path": "/assets/models/3d/prizes/animal-dog.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "panda",
+      "label": "Panda",
+      "path": "/assets/models/3d/prizes/animal-panda.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "penguin",
+      "label": "Penguin",
+      "path": "/assets/models/3d/prizes/animal-penguin.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "tiger",
+      "label": "Tiger",
+      "path": "/assets/models/3d/prizes/animal-tiger.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    }
+  ],
+  "clawMachineParts": [
+    {
+      "id": "crane",
+      "path": "/assets/models/3d/claw-machine/crane.glb",
+      "use": "overhead gantry or rail housing",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "crane-lift",
+      "path": "/assets/models/3d/claw-machine/crane-lift.glb",
+      "use": "vertical lift module",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "robot-arm-a",
+      "path": "/assets/models/3d/claw-machine/robot-arm-a.glb",
+      "use": "mechanical gripper finger or decorative arm",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "robot-arm-b",
+      "path": "/assets/models/3d/claw-machine/robot-arm-b.glb",
+      "use": "mechanical gripper finger or decorative arm",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "piston-thin-round",
+      "path": "/assets/models/3d/claw-machine/piston-thin-round.glb",
+      "use": "claw actuator or suspension detail",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "cog-b",
+      "path": "/assets/models/3d/claw-machine/cog-b.glb",
+      "use": "mechanical dressing",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "machine-window",
+      "path": "/assets/models/3d/claw-machine/machine-window.glb",
+      "use": "cabinet window or front frame",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "conveyor-long",
+      "path": "/assets/models/3d/claw-machine/conveyor-long.glb",
+      "use": "floor tray or prize chute base",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    }
+  ]
+}

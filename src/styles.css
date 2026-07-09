@@ -1,15 +1,17 @@
 :root {
   color-scheme: dark;
-  --ink: #101114;
-  --panel: #181714;
-  --panel-2: #252018;
-  --cream: #fff4d6;
-  --muted: #c7ad84;
-  --gold: #ffc44d;
-  --hot: #ff5b3f;
-  --mint: #58f2b8;
-  --glass: rgba(16, 17, 20, 0.72);
-  --line: rgba(255, 196, 77, 0.28);
+  --ink: #0d1014;
+  --panel: #15171b;
+  --panel-2: #20242a;
+  --cream: #fff7e6;
+  --muted: #b6c0bd;
+  --gold: #ffc857;
+  --amber: #ff9f43;
+  --hot: #ff5f7e;
+  --mint: #55efc4;
+  --cyan: #73d2ff;
+  --glass: rgba(12, 16, 21, 0.74);
+  --line: rgba(255, 200, 87, 0.24);
 }
 
 * {
@@ -22,9 +24,10 @@ body {
   min-height: 100%;
   margin: 0;
   background:
-    radial-gradient(circle at 12% 20%, rgba(255, 91, 63, 0.22), transparent 32rem),
-    radial-gradient(circle at 80% 10%, rgba(88, 242, 184, 0.16), transparent 26rem),
-    linear-gradient(135deg, #100f12 0%, #21180f 48%, #08090b 100%);
+    radial-gradient(circle at 10% 18%, rgba(255, 95, 126, 0.18), transparent 30rem),
+    radial-gradient(circle at 72% 4%, rgba(115, 210, 255, 0.2), transparent 28rem),
+    radial-gradient(circle at 50% 92%, rgba(255, 200, 87, 0.1), transparent 36rem),
+    linear-gradient(135deg, #130f16 0%, #101922 52%, #07090d 100%);
   color: var(--cream);
   font-family: "Trebuchet MS", "Microsoft YaHei", sans-serif;
   overflow-x: hidden;
@@ -37,24 +40,28 @@ code {
 }
 
 .shell {
-  width: min(1480px, 100vw);
+  width: min(1510px, 100vw);
   min-height: 100vh;
   margin: 0 auto;
   padding: 24px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr) 372px;
+  gap: 24px;
   align-items: stretch;
 }
 
 .machine-panel {
   position: relative;
   min-height: calc(100vh - 48px);
-  border: 2px solid rgba(255, 196, 77, 0.42);
+  border: 1px solid rgba(255, 200, 87, 0.32);
   border-radius: 8px;
   overflow: hidden;
-  background: #0e0f13;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.44), inset 0 0 0 6px rgba(255, 255, 255, 0.04);
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent 30%),
+    #0b0d12;
+  box-shadow:
+    0 26px 90px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 #game-canvas {
@@ -76,18 +83,18 @@ code {
     transparent 5px
   );
   mix-blend-mode: overlay;
-  opacity: 0.32;
+  opacity: 0.2;
 }
 
 .control-panel {
   min-height: calc(100vh - 48px);
-  padding: 22px;
-  border: 1px solid var(--line);
+  padding: 24px;
+  border: 1px solid rgba(255, 200, 87, 0.26);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(37, 32, 24, 0.96), rgba(18, 18, 17, 0.96)),
-    linear-gradient(90deg, rgba(255, 196, 77, 0.12), transparent);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.36);
+    linear-gradient(180deg, rgba(26, 29, 34, 0.96), rgba(12, 14, 18, 0.98)),
+    radial-gradient(circle at 100% 0%, rgba(85, 239, 196, 0.08), transparent 18rem);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.42);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -95,7 +102,7 @@ code {
 
 .eyebrow {
   margin: 0 0 8px;
-  color: var(--gold);
+  color: var(--mint);
   font-size: 12px;
   letter-spacing: 0.24em;
   font-weight: 800;
@@ -103,7 +110,7 @@ code {
 
 h1 {
   margin: 0;
-  font-size: clamp(36px, 4vw, 52px);
+  font-size: clamp(34px, 4vw, 50px);
   line-height: 0.95;
   letter-spacing: 0.02em;
 }
@@ -111,7 +118,7 @@ h1 {
 .lede {
   margin: 14px 0 0;
   color: var(--muted);
-  line-height: 1.65;
+  line-height: 1.7;
 }
 
 .status-grid {
@@ -122,10 +129,12 @@ h1 {
 
 .status-grid > div {
   min-height: 76px;
-  padding: 12px;
-  border: 1px solid rgba(255, 196, 77, 0.18);
+  padding: 13px;
+  border: 1px solid rgba(255, 200, 87, 0.14);
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0.12)),
+    rgba(0, 0, 0, 0.18);
 }
 
 .label {
@@ -139,13 +148,14 @@ h1 {
   display: block;
   color: var(--cream);
   line-height: 1.35;
+  font-size: 17px;
 }
 
 .camera-card {
   position: relative;
   aspect-ratio: 4 / 3;
   overflow: hidden;
-  border: 1px solid rgba(88, 242, 184, 0.28);
+  border: 1px solid rgba(85, 239, 196, 0.32);
   border-radius: 8px;
   background: #050606;
 }
@@ -170,7 +180,7 @@ h1 {
   right: 10px;
   bottom: 10px;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 244, 214, 0.12);
+  border: 1px solid rgba(255, 247, 230, 0.12);
   border-radius: 6px;
   background: var(--glass);
   color: var(--cream);
@@ -188,7 +198,8 @@ h1 {
   grid-template-columns: 54px 1fr;
   align-items: center;
   gap: 10px;
-  color: var(--muted);
+  color: var(--cream);
+  font-weight: 700;
 }
 
 meter {
@@ -206,11 +217,11 @@ button {
   min-height: 46px;
   border: 0;
   border-radius: 8px;
-  color: #20160d;
-  background: var(--gold);
+  color: #1a1308;
+  background: linear-gradient(180deg, #ffe18a, var(--gold) 55%, #ffad3d);
   font-weight: 900;
   cursor: pointer;
-  box-shadow: 0 10px 22px rgba(255, 196, 77, 0.18);
+  box-shadow: 0 12px 26px rgba(255, 200, 87, 0.2);
 }
 
 button:hover {
@@ -224,14 +235,17 @@ button:active {
 #reset-button {
   color: var(--cream);
   background: transparent;
-  border: 1px solid rgba(255, 196, 77, 0.32);
+  border: 1px solid rgba(255, 200, 87, 0.28);
+  box-shadow: none;
 }
 
 .instructions {
   margin-top: auto;
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.65;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .instructions p {
@@ -242,7 +256,7 @@ kbd,
 code {
   padding: 2px 6px;
   border-radius: 5px;
-  background: rgba(255, 244, 214, 0.1);
+  background: rgba(255, 247, 230, 0.1);
   color: var(--cream);
 }
 
