@@ -272,10 +272,10 @@ function buildClaw() {
   const group = sceneObjects.claw;
   sceneObjects.machine.add(group);
 
-  const hub = addBox(group, [0.58, 0.36, 0.58], [0, 0, 0], mats.clawBody, true);
+  const hub = addBox(group, [0.46, 0.28, 0.46], [0, 0, 0], mats.clawBody, true);
   hub.name = "claw-hub";
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.22, 24), mats.rail);
-  collar.position.y = 0.27;
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.18, 24), mats.rail);
+  collar.position.y = 0.22;
   collar.castShadow = true;
   group.add(collar);
 
@@ -291,14 +291,14 @@ function buildClaw() {
     const angle = i * (Math.PI * 2 / 3) + Math.PI / 6;
     finger.userData.baseAngle = angle;
 
-    addRod(finger, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.34, -0.62, 0), 0.045, mats.clawMetal);
-    addRod(finger, new THREE.Vector3(0.34, -0.62, 0), new THREE.Vector3(0.16, -1.08, 0), 0.045, mats.clawMetal);
-    addRod(finger, new THREE.Vector3(0.16, -1.08, 0), new THREE.Vector3(-0.04, -1.18, 0), 0.04, mats.clawMetal);
-    addJoint(finger, 0, 0, 0, 0.07);
-    addJoint(finger, 0.34, -0.62, 0, 0.065);
+    addRod(finger, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.22, -0.38, 0), 0.034, mats.clawMetal);
+    addRod(finger, new THREE.Vector3(0.22, -0.38, 0), new THREE.Vector3(0.1, -0.7, 0), 0.034, mats.clawMetal);
+    addRod(finger, new THREE.Vector3(0.1, -0.7, 0), new THREE.Vector3(-0.05, -0.77, 0), 0.03, mats.clawMetal);
+    addJoint(finger, 0, 0, 0, 0.052);
+    addJoint(finger, 0.22, -0.38, 0, 0.05);
 
     finger.rotation.y = angle;
-    finger.position.set(Math.cos(angle) * 0.2, -0.16, Math.sin(angle) * 0.2);
+    finger.position.set(Math.cos(angle) * 0.16, -0.12, Math.sin(angle) * 0.16);
     group.add(finger);
     sceneObjects.fingers.push(finger);
   }
@@ -737,7 +737,7 @@ function updateState(dt) {
   } else if (game.state === STATES.LIFTING) {
     claw.targetY = WORLD.clawHomeY;
     if (game.grabbedPrize) {
-      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.82, claw.z + 0.04);
+      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
       game.grabbedPrize.object.rotation.y += dt * 0.002;
     }
     if (Math.abs(claw.y - WORLD.clawHomeY) < 0.05) setState(STATES.RETURNING);
@@ -746,7 +746,7 @@ function updateState(dt) {
     claw.targetZ = WORLD.exit.z - 0.08;
     claw.targetY = WORLD.clawHomeY;
     if (game.grabbedPrize) {
-      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.82, claw.z + 0.04);
+      game.grabbedPrize.object.position.set(claw.x, claw.y - 0.62, claw.z + 0.04);
       game.grabbedPrize.object.rotation.y += dt * 0.002;
     }
     if (Math.abs(claw.x - claw.targetX) < 0.07 && Math.abs(claw.z - claw.targetZ) < 0.07) {
@@ -832,9 +832,9 @@ function updateClaw(dt) {
 
   sceneObjects.claw.position.set(claw.x, claw.y, claw.z);
   sceneObjects.fingers.forEach((finger) => {
-    const spread = lerp(0.55, 0.18, claw.closed);
+    const spread = lerp(0.38, 0.14, claw.closed);
     finger.position.set(Math.cos(finger.userData.baseAngle) * spread, -0.08, Math.sin(finger.userData.baseAngle) * spread);
-    finger.rotation.z = lerp(0.24, -0.12, claw.closed);
+    finger.rotation.z = lerp(0.18, -0.08, claw.closed);
   });
 
   const cableLength = Math.max(0.35, WORLD.railY - claw.y);
