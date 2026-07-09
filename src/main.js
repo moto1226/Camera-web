@@ -98,7 +98,14 @@ const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
 const CLAW_GRIP_CLOSED = 0.48;
-const GRIP_CONSTRAINT_FORCE = 90;
+const GRIP_CONSTRAINT_FORCE = 58;
+const GRIP_CONSTRAINT_STIFFNESS = 9e4;
+const GRIP_CONSTRAINT_RELAXATION = 8;
+const GRIP_ANCHOR_MAX_SPEED = 1.65;
+const GRABBED_MAX_SPEED = 1.45;
+const GRABBED_MAX_ANGULAR_SPEED = 1.9;
+const HELD_CLAW_LIFT_SPEED = 0.00105;
+const HELD_CLAW_TRAVEL_SPEED = 0.00145;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -629,15 +636,29 @@ function capturePrize(prize) {
       new CANNON.Vec3(0, 0, 0),
       GRIP_CONSTRAINT_FORCE,
     );
+    softenGripConstraint(constraint);
     physics.world.addConstraint(constraint);
     return constraint;
   });
   syncPrizeVisual(prize);
 }
 
+function softenGripConstraint(constraint) {
+  constraint.collideConnected = false;
+  constraint.equations.forEach((equation) => {
+    equation.setSpookParams(
+      GRIP_CONSTRAINT_STIFFNESS,
+      GRIP_CONSTRAINT_RELAXATION,
+      physics.fixedTimeStep,
+    );
+  });
+}
+
 function syncHeldPrize(prize, dt) {
   if (!prize.body) return;
   syncGripAnchors(dt);
+  clampVec3Length(prize.body.velocity, GRABBED_MAX_SPEED);
+  clampVec3Length(prize.body.angularVelocity, GRABBED_MAX_ANGULAR_SPEED);
   prize.body.wakeUp();
   syncPrizeVisual(prize);
 }
@@ -708,16 +729,24 @@ function syncGripAnchors(dt, teleport = false) {
     const body = physics.gripAnchors[index];
     if (!body) return;
 
-    const dx = target.x - body.position.x;
-    const dy = target.y - body.position.y;
-    const dz = target.z - body.position.z;
-    if (teleport || Math.hypot(dx, dy, dz) > 1.4) {
+    let dx = target.x - body.position.x;
+    let dy = target.y - body.position.y;
+    let dz = target.z - body.position.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (teleport || distance > 1.4) {
       body.position.set(target.x, target.y, target.z);
       body.previousPosition.copy(body.position);
       body.velocity.set(0, 0, 0);
     } else {
+      const maxStep = GRIP_ANCHOR_MAX_SPEED * seconds;
+      const ratio = distance > maxStep && distance > 0 ? maxStep / distance : 1;
+      dx *= ratio;
+      dy *= ratio;
+      dz *= ratio;
       body.velocity.set(dx / seconds, dy / seconds, dz / seconds);
-      body.position.set(target.x, target.y, target.z);
+      body.position.x += dx;
+      body.position.y += dy;
+      body.position.z += dz;
     }
     body.aabbNeedsUpdate = true;
   });
@@ -1282,9 +1311,15 @@ function updateClaw(dt) {
   }
 
   const follow = 1 - Math.pow(0.002, dt / 1000);
-  claw.x = lerp(claw.x, claw.targetX, follow);
-  claw.y = lerp(claw.y, claw.targetY, follow);
-  claw.z = lerp(claw.z, claw.targetZ, follow);
+  if (game.grabbedPrize && [STATES.LIFTING, STATES.RETURNING].includes(game.state)) {
+    claw.x = approach(claw.x, claw.targetX, dt * HELD_CLAW_TRAVEL_SPEED);
+    claw.y = approach(claw.y, claw.targetY, dt * HELD_CLAW_LIFT_SPEED);
+    claw.z = approach(claw.z, claw.targetZ, dt * HELD_CLAW_TRAVEL_SPEED);
+  } else {
+    claw.x = lerp(claw.x, claw.targetX, follow);
+    claw.y = lerp(claw.y, claw.targetY, follow);
+    claw.z = lerp(claw.z, claw.targetZ, follow);
+  }
   constrainClawAgainstPrizes(dt);
 
   sceneObjects.claw.position.set(claw.x, claw.y, claw.z);
@@ -1305,12 +1340,21 @@ function updatePrizes(now) {
   sceneObjects.prizes.forEach((prize) => {
     if (prize.collected || !prize.object.visible) return;
     if (prize.grabbed) {
+      stabilizeGrabbedPrize(prize);
       syncPrizeVisual(prize);
       return;
     }
     if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
     syncPrizeVisual(prize);
   });
+}
+
+function stabilizeGrabbedPrize(prize) {
+  if (!prize.body) return;
+  clampVec3Length(prize.body.velocity, GRABBED_MAX_SPEED);
+  clampVec3Length(prize.body.angularVelocity, GRABBED_MAX_ANGULAR_SPEED);
+  prize.body.linearDamping = 0.84;
+  prize.body.angularDamping = 0.94;
 }
 
 function pickPrize() {
@@ -1459,6 +1503,13 @@ function map(value, inMin, inMax, outMin, outMax) {
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
 }
 
+function clampVec3Length(vec, maxLength) {
+  const length = vec.length();
+  if (length > maxLength && length > 0) {
+    vec.scale(maxLength / length, vec);
+  }
+}
+
 function worldXToInput(x) {
   return clamp(map(x, WORLD.xMin, WORLD.xMax, 0, 1), 0, 1);
 }
@@ -1521,6 +1572,8 @@ window.__clawDebug = {
       clawY: Number(claw.y.toFixed(3)),
       clawClosed: Number(claw.closed.toFixed(3)),
       grabbedPrizeY: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.position.y.toFixed(3)) : null,
+      grabbedPrizeSpeed: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.velocity.length().toFixed(3)) : 0,
+      grabbedPrizeAngularSpeed: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.angularVelocity.length().toFixed(3)) : 0,
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
     };
