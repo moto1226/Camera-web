@@ -23,17 +23,13 @@ try {
     throw new Error(`Unexpected result: ${state.result}`);
   }
 
-  await page.keyboard.down("Enter");
-  await page.evaluate(() => window.__clawDebug.advance(1600));
-  await page.keyboard.up("Enter");
-  await page.waitForFunction(
-    (previousRound) => {
-      const nextState = window.__clawDebug.getState();
-      return nextState.state === "controlling" && nextState.round > previousRound;
-    },
-    state.round,
-    { timeout: 5000 },
-  );
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await page.evaluate(() => window.__clawDebug.advance(1200));
+  const keyboardState = await page.evaluate(() => window.__clawDebug.getState());
+  if (keyboardState.round !== state.round || keyboardState.state !== "result") {
+    throw new Error("Keyboard input should not control the game");
+  }
 
   const painted = await page.evaluate(() => {
     const canvas = document.getElementById("game-canvas");

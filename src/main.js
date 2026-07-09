@@ -80,7 +80,6 @@ const game = {
   demoActive: false,
   demoTime: 0,
   round: 0,
-  keys: new Set(),
 };
 
 const claw = {
@@ -934,9 +933,9 @@ async function initCameraAndModel() {
   ui.cameraMessage.textContent = "摄像头已启用：张开手掌开始。";
 }
 
-function enableDebugMode(reason) {
-  game.inputMode = "debug";
-  ui.cameraMessage.textContent = `调试模式：${reason} 用键盘或自动演示验证流程。`;
+function enableDemoMode(reason) {
+  game.inputMode = "demo";
+  ui.cameraMessage.textContent = `演示模式：${reason} 可点击自动演示验证流程。`;
 }
 
 function fingerExtended(lm, tip, pip, mcp) {
@@ -1018,18 +1017,6 @@ function drawHandOverlay(lm) {
   });
 }
 
-function readDebugInput(dt) {
-  const speed = dt * 0.0012;
-  if (game.keys.has("ArrowLeft") || game.keys.has("KeyA")) input.rawX -= speed;
-  if (game.keys.has("ArrowRight") || game.keys.has("KeyD")) input.rawX += speed;
-  if (game.keys.has("ArrowUp") || game.keys.has("KeyW")) input.rawY -= speed;
-  if (game.keys.has("ArrowDown") || game.keys.has("KeyS")) input.rawY += speed;
-  input.rawX = clamp(input.rawX, 0, 1);
-  input.rawY = clamp(input.rawY, 0, 1);
-  input.openPalm = (game.state === STATES.IDLE || game.state === STATES.RESULT) && game.keys.has("Enter");
-  input.fist = game.keys.has("Space");
-}
-
 function readDemoInput(dt) {
   game.demoTime += dt;
   const t = game.demoTime;
@@ -1102,7 +1089,7 @@ function updateUi() {
     ? "自动演示"
     : game.inputMode === "camera"
       ? "摄像头"
-      : "键盘调试";
+      : "演示模式";
   ui.gesture.textContent = input.fist ? "攥拳" : input.openPalm ? "张开手掌" : game.handPresent ? "手已入镜" : "未检测";
   ui.result.textContent = game.result;
   ui.meterX.value = input.x;
@@ -1111,9 +1098,9 @@ function updateUi() {
 
 function updateMessage() {
   if (game.state === STATES.IDLE) {
-    setMessage("张开手掌开始", "或按 Enter 使用调试模式");
+    setMessage("张开手掌开始", "无摄像头可点自动演示");
   } else if (game.state === STATES.RESULT) {
-    setMessage(game.result, "张开手掌或按 Enter 再来一局");
+    setMessage(game.result, "张开手掌或点自动演示再来一局");
   } else if (sceneObjects.messageSprite) {
     sceneObjects.machine.remove(sceneObjects.messageSprite);
     sceneObjects.messageSprite.material.map.dispose();
@@ -1386,7 +1373,6 @@ function tick(now) {
 
   if (game.inputMode === "camera") readCameraInput();
   if (game.demoActive) readDemoInput(dt);
-  else if (game.inputMode !== "camera") readDebugInput(dt);
 
   input.x = lerp(input.x, input.rawX, 0.18);
   input.y = lerp(input.y, input.rawY, 0.18);
@@ -1439,7 +1425,7 @@ window.__clawDebug = {
   startDemo() {
     resetGame();
     game.demoActive = true;
-    game.inputMode = game.inputMode === "camera" ? "camera" : "debug";
+    game.inputMode = game.inputMode === "camera" ? "camera" : "demo";
     game.demoTime = 0;
     ui.cameraMessage.textContent = "自动演示正在生成模拟手势轨迹。";
   },
@@ -1449,7 +1435,6 @@ window.__clawDebug = {
       const dt = Math.min(180, step);
       if (game.inputMode === "camera") readCameraInput();
       if (game.demoActive) readDemoInput(dt);
-      else if (game.inputMode !== "camera") readDebugInput(dt);
       input.x = lerp(input.x, input.rawX, 0.18);
       input.y = lerp(input.y, input.rawY, 0.18);
       updateState(dt);
@@ -1525,22 +1510,11 @@ window.__clawDebug = {
   },
 };
 
-document.addEventListener("keydown", (event) => {
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(event.code)) {
-    event.preventDefault();
-  }
-  game.keys.add(event.code);
-});
-
-document.addEventListener("keyup", (event) => {
-  game.keys.delete(event.code);
-});
-
 ui.demo.addEventListener("click", () => window.__clawDebug.startDemo());
 ui.reset.addEventListener("click", resetGame);
 
 resetGame();
 initCameraAndModel().catch((error) => {
-  enableDebugMode(error.message || "摄像头不可用。");
+  enableDemoMode(error.message || "摄像头不可用。");
 });
 requestAnimationFrame(tick);
