@@ -19,6 +19,11 @@ const ui = {
   meterY: document.getElementById("meter-y"),
   demo: document.getElementById("demo-button"),
   reset: document.getElementById("reset-button"),
+  scoreSummary: document.getElementById("score-summary"),
+  scoreElapsed: document.getElementById("score-elapsed"),
+  scoreRate: document.getElementById("score-rate"),
+  scoreLast: document.getElementById("score-last"),
+  scoreLog: document.getElementById("score-log"),
 };
 
 const STATES = {
@@ -80,6 +85,11 @@ const game = {
   demoActive: false,
   demoTime: 0,
   round: 0,
+  sessionActive: false,
+  sessionElapsedMs: 0,
+  currentAttemptStartedMs: 0,
+  attempts: [],
+  awaitFistRelease: false,
 };
 
 const claw = {
@@ -1134,6 +1144,33 @@ function setState(next) {
   updateMessage();
 }
 
+function startSession() {
+  if (game.sessionActive) return;
+  game.sessionActive = true;
+  game.sessionElapsedMs = 0;
+  game.currentAttemptStartedMs = 0;
+  game.attempts = [];
+  game.awaitFistRelease = false;
+}
+
+function startAttempt() {
+  game.currentAttemptStartedMs = game.sessionElapsedMs;
+}
+
+function recordAttempt(success) {
+  const durationMs = Math.max(0, game.sessionElapsedMs - (game.currentAttemptStartedMs || game.sessionElapsedMs));
+  const attempt = {
+    index: game.attempts.length + 1,
+    success,
+    elapsedMs: game.sessionElapsedMs,
+    durationMs,
+  };
+  game.attempts.push(attempt);
+  game.result = success ? "抓到了" : "差一点";
+  game.currentAttemptStartedMs = 0;
+  return attempt;
+}
+
 function resetGame() {
   setState(STATES.IDLE);
   clearEffects();
@@ -1147,6 +1184,11 @@ function resetGame() {
   game.demoActive = false;
   game.demoTime = 0;
   game.round += 1;
+  game.sessionActive = false;
+  game.sessionElapsedMs = 0;
+  game.currentAttemptStartedMs = 0;
+  game.attempts = [];
+  game.awaitFistRelease = false;
   input.rawX = 0.5;
   input.rawY = 0.5;
   input.x = 0.5;
@@ -1181,6 +1223,34 @@ function updateUi() {
   ui.result.textContent = game.result;
   ui.meterX.value = input.x;
   ui.meterY.value = input.y;
+  updateScoreboard();
+}
+
+function updateScoreboard() {
+  const attempts = game.attempts.length;
+  const successes = game.attempts.filter((attempt) => attempt.success).length;
+  const latest = game.attempts.at(-1);
+  const rate = attempts ? Math.round((successes / attempts) * 100) : 0;
+
+  ui.scoreSummary.textContent = `${attempts} 次 / ${successes} 成功`;
+  ui.scoreElapsed.textContent = formatClock(game.sessionElapsedMs);
+  ui.scoreRate.textContent = `成功率 ${rate}%`;
+  ui.scoreLast.textContent = latest
+    ? `最近：${latest.success ? "成功" : "失败"}，${formatClock(latest.elapsedMs)}`
+    : "暂无抓取记录";
+
+  ui.scoreLog.replaceChildren(...game.attempts.slice(-6).reverse().map((attempt) => {
+    const item = document.createElement("li");
+    const index = document.createElement("span");
+    const time = document.createElement("span");
+    const result = document.createElement("strong");
+    index.textContent = `#${attempt.index}`;
+    time.textContent = `${formatClock(attempt.elapsedMs)} / ${formatDuration(attempt.durationMs)}`;
+    result.textContent = attempt.success ? "成功" : "失败";
+    result.className = attempt.success ? "success" : "miss";
+    item.append(index, time, result);
+    return item;
+  }));
 }
 
 function updateMessage() {
@@ -1198,13 +1268,20 @@ function updateMessage() {
 
 function updateState(dt) {
   game.stateTime += dt;
+  if (game.sessionActive) game.sessionElapsedMs += dt;
 
   if (game.state === STATES.IDLE) {
     updateStartGesture(dt, 900, false);
   } else if (game.state === STATES.CONTROLLING) {
+    if (game.awaitFistRelease) {
+      if (!input.fist) game.awaitFistRelease = false;
+      game.fistMs = 0;
+      return;
+    }
     game.fistMs = input.fist ? game.fistMs + dt : 0;
     if (game.fistMs >= 280) {
       game.fistMs = 0;
+      startAttempt();
       setState(STATES.DROPPING);
     }
   } else if (game.state === STATES.DROPPING) {
@@ -1241,17 +1318,28 @@ function updateState(dt) {
       game.releaseStarted = true;
     }
     if (game.stateTime > 760) {
-      if (game.grabbedPrize) {
+      const success = Boolean(game.grabbedPrize);
+      if (success) {
         game.grabbedPrize.collected = true;
         game.grabbedPrize.object.visible = false;
-        game.result = "抓到了";
+        if (game.grabbedPrize.body) game.grabbedPrize.body.collisionResponse = false;
         triggerResultEffect("success");
       } else {
-        game.result = "差一点";
         triggerResultEffect("miss");
       }
+      recordAttempt(success);
       game.demoActive = false;
-      setState(STATES.RESULT);
+      ui.cameraMessage.textContent = game.inputMode === "camera"
+        ? "本次抓取已记录，可继续移动手掌。"
+        : "本次抓取已记录，可再次点击自动演示。";
+      game.awaitFistRelease = true;
+      game.grabbedPrize = null;
+      game.releaseStarted = false;
+      claw.targetX = 0;
+      claw.targetY = WORLD.clawHomeY;
+      claw.targetZ = 0;
+      claw.closed = 0;
+      setState(STATES.CONTROLLING);
     }
   } else if (game.state === STATES.RESULT) {
     claw.targetX = 0;
@@ -1266,6 +1354,7 @@ function updateStartGesture(dt, holdMs, shouldResetRound) {
   if (game.palmOpenMs < holdMs || (shouldResetRound && game.stateTime < 900)) return;
 
   if (shouldResetRound) resetRoundForReplay();
+  if (!shouldResetRound) startSession();
   game.result = "游戏中";
   game.calibration = null;
   game.palmOpenMs = 0;
@@ -1503,6 +1592,17 @@ function map(value, inMin, inMax, outMin, outMax) {
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
 }
 
+function formatClock(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDuration(ms) {
+  return `${Math.max(0, ms / 1000).toFixed(1)}s`;
+}
+
 function clampVec3Length(vec, maxLength) {
   const length = vec.length();
   if (length > maxLength && length > 0) {
@@ -1534,10 +1634,13 @@ function easeInOut(t) {
 
 window.__clawDebug = {
   startDemo() {
-    resetGame();
+    if (game.state !== STATES.IDLE && game.state !== STATES.CONTROLLING) return;
+    if (!game.sessionActive || game.state === STATES.IDLE) resetGame();
     game.demoActive = true;
     game.inputMode = game.inputMode === "camera" ? "camera" : "demo";
     game.demoTime = 0;
+    game.fistMs = 0;
+    game.awaitFistRelease = false;
     ui.cameraMessage.textContent = "自动演示正在生成模拟手势轨迹。";
   },
   advance(ms, step = 100) {
@@ -1563,6 +1666,10 @@ window.__clawDebug = {
       result: game.result,
       inputMode: game.inputMode,
       round: game.round,
+      attempts: game.attempts.length,
+      successes: game.attempts.filter((attempt) => attempt.success).length,
+      sessionElapsedMs: Math.round(game.sessionElapsedMs),
+      latestAttempt: game.attempts.at(-1) || null,
       canvasPainted: true,
       renderer: "three",
       prizeCount: sceneObjects.prizes.length,

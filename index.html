@@ -42,6 +42,24 @@
           </div>
         </div>
 
+        <section class="score-board" aria-label="抓取计分牌">
+          <div class="score-head">
+            <div>
+              <span class="label">计分牌</span>
+              <strong id="score-summary">0 次 / 0 成功</strong>
+            </div>
+            <div>
+              <span class="label">用时</span>
+              <strong id="score-elapsed">00:00</strong>
+            </div>
+          </div>
+          <div class="score-stats">
+            <span id="score-rate">成功率 0%</span>
+            <span id="score-last">暂无抓取记录</span>
+          </div>
+          <ol id="score-log" class="score-log" aria-label="抓取历史"></ol>
+        </section>
+
         <div class="camera-card">
           <video id="camera-video" autoplay playsinline muted></video>
           <canvas id="hand-overlay" width="320" height="240"></canvas>
@@ -65,8 +83,8 @@
         </div>
 
         <div class="instructions">
-          <p>张开手掌校准位置，攥拳后机器会自动完成下爪、回收和放奖。</p>
-          <p>没有摄像头时，点击自动演示可跑完整抓取流程。</p>
+          <p>张开手掌开始一场游戏，攥拳后机器会自动完成下爪、回收和放奖。</p>
+          <p>每次下爪都会计入计分牌，想结束时点击重置。</p>
         </div>
       </aside>
     </main>
