@@ -25,6 +25,12 @@ try {
   if (state.attempts !== 1 || state.latestAttempt?.success !== (state.result === "抓到了")) {
     throw new Error("Scoreboard attempt was not recorded correctly");
   }
+  if (state.carryMaxRelativeDelta > 0.001 || state.gripConstraintCount !== 0) {
+    throw new Error(`Carried prize was not stable: ${JSON.stringify({
+      carryMaxRelativeDelta: state.carryMaxRelativeDelta,
+      gripConstraintCount: state.gripConstraintCount,
+    })}`);
+  }
 
   await page.keyboard.press("Enter");
   await page.keyboard.press("Space");
@@ -47,6 +53,9 @@ try {
   const secondAttemptState = await page.evaluate(() => window.__clawDebug.getState());
   if (secondAttemptState.round !== state.round || secondAttemptState.attempts !== 2) {
     throw new Error("Second attempt should be recorded in the same session");
+  }
+  if (secondAttemptState.carryMaxRelativeDelta > 0.001 || secondAttemptState.gripConstraintCount !== 0) {
+    throw new Error("Second carried prize was not stable");
   }
 
   const painted = await page.evaluate(() => {

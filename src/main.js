@@ -121,6 +121,7 @@ const game = {
   cameraProblem: "",
   lastHandSeenAt: 0,
   resultFlashMs: 0,
+  lastCarryMaxRelativeDelta: 0,
 };
 
 const claw = {
@@ -139,14 +140,9 @@ const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
 const CLAW_GRIP_CLOSED = 0.48;
-const GRIP_CONSTRAINT_FORCE = 58;
-const GRIP_CONSTRAINT_STIFFNESS = 9e4;
-const GRIP_CONSTRAINT_RELAXATION = 8;
-const GRIP_ANCHOR_MAX_SPEED = 1.65;
-const GRABBED_MAX_SPEED = 1.45;
-const GRABBED_MAX_ANGULAR_SPEED = 1.9;
 const HELD_CLAW_LIFT_SPEED = 0.00105;
 const HELD_CLAW_TRAVEL_SPEED = 0.00145;
+const CARRY_RELATIVE_WARN_THRESHOLD = 0.035;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const physics = {
   world: null,
@@ -155,7 +151,6 @@ const physics = {
   clawMaterial: null,
   clawBody: null,
   clawBodies: [],
-  gripAnchors: [],
   fixedTimeStep: 1 / 60,
   maxSubSteps: 5,
 };
@@ -421,12 +416,17 @@ function buildPrizePlaceholders() {
       radius: 0.46,
       grabbed: false,
       collected: false,
+      positionOwner: "physics",
       wobble: Math.random() * Math.PI * 2,
       body: null,
       bodyOffsetY: PRIZE_BODY_OFFSET_Y,
       holdSpin: 0,
       holdOffset: null,
       holdBlend: 0,
+      holdQuaternion: null,
+      carryVelocity: new CANNON.Vec3(0, 0, 0),
+      carryStartOffset: null,
+      carryMaxRelativeDelta: 0,
       gripConstraints: [],
     };
     createPrizeBody(prize);
@@ -547,10 +547,8 @@ function initPhysics() {
   for (let i = 0; i < 3; i += 1) {
     createClawCollider(0.16, `knuckle-${i}`);
     createClawCollider(0.16, `tip-${i}`);
-    createGripAnchor();
   }
   syncClawCollider(16, true);
-  syncGripAnchors(16, true);
 }
 
 function addStaticBody(center, halfExtents) {
@@ -575,18 +573,6 @@ function createClawCollider(radius, role) {
   return body;
 }
 
-function createGripAnchor() {
-  const body = new CANNON.Body({
-    mass: 0,
-    type: CANNON.Body.KINEMATIC,
-    material: physics.clawMaterial,
-    collisionResponse: false,
-  });
-  physics.world.addBody(body);
-  physics.gripAnchors.push(body);
-  return body;
-}
-
 function createPrizeBody(prize) {
   if (!physics.world) return null;
 
@@ -607,6 +593,7 @@ function createPrizeBody(prize) {
   prize.body = body;
   prize.bodyOffsetY = PRIZE_BODY_OFFSET_Y;
   prize.holdSpin = 0;
+  prize.positionOwner = "physics";
   syncPrizeVisual(prize);
   return body;
 }
@@ -642,6 +629,13 @@ function resetPrizePhysics(prize, rotate = true) {
   prize.holdSpin = 0;
   prize.holdOffset = null;
   prize.holdBlend = 0;
+  prize.holdQuaternion = null;
+  prize.positionOwner = "physics";
+  prize.carryVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
+  prize.carryVelocity.set(0, 0, 0);
+  prize.carryStartOffset = null;
+  prize.carryMaxRelativeDelta = 0;
+  prize.carryRelativeWarningShown = false;
   clearPrizeGrip(prize);
   syncPrizeVisual(prize);
 }
@@ -651,67 +645,128 @@ function capturePrize(prize) {
   if (!prize.body) return;
 
   clearPrizeGrip(prize);
-  prize.body.type = CANNON.Body.DYNAMIC;
-  prize.body.mass = PRIZE_MASS;
-  prize.body.collisionResponse = true;
+  prize.positionOwner = "claw";
+  prize.body.type = CANNON.Body.KINEMATIC;
+  prize.body.mass = 0;
+  prize.body.collisionResponse = false;
   prize.body.updateMassProperties();
-  prize.body.linearDamping = 0.76;
-  prize.body.angularDamping = 0.9;
-  prize.body.velocity.scale(0.25, prize.body.velocity);
-  prize.body.angularVelocity.scale(0.35, prize.body.angularVelocity);
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.force.set(0, 0, 0);
+  prize.body.torque.set(0, 0, 0);
   prize.body.wakeUp();
 
-  syncGripAnchors(16, true);
-  const anchors = getGripAnchorTargets();
-  prize.gripConstraints = anchors.map((target, index) => {
-    const anchor = physics.gripAnchors[index];
-    const worldPivot = new CANNON.Vec3(target.x, target.y, target.z);
-    const localPivot = prize.body.pointToLocalFrame(worldPivot);
-    localPivot.x = clamp(localPivot.x, -PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.x);
-    localPivot.y = clamp(localPivot.y, -PRIZE_BODY_HALF.y * 0.55, PRIZE_BODY_HALF.y * 0.55);
-    localPivot.z = clamp(localPivot.z, -PRIZE_BODY_HALF.z, PRIZE_BODY_HALF.z);
-    const constraint = new CANNON.PointToPointConstraint(
-      prize.body,
-      localPivot,
-      anchor,
-      new CANNON.Vec3(0, 0, 0),
-      GRIP_CONSTRAINT_FORCE,
-    );
-    softenGripConstraint(constraint);
-    physics.world.addConstraint(constraint);
-    return constraint;
-  });
-  syncPrizeVisual(prize);
-}
-
-function softenGripConstraint(constraint) {
-  constraint.collideConnected = false;
-  constraint.equations.forEach((equation) => {
-    equation.setSpookParams(
-      GRIP_CONSTRAINT_STIFFNESS,
-      GRIP_CONSTRAINT_RELAXATION,
-      physics.fixedTimeStep,
-    );
-  });
+  prize.holdOffset = new CANNON.Vec3(
+    prize.body.position.x - claw.x,
+    prize.body.position.y - claw.y,
+    prize.body.position.z - claw.z,
+  );
+  prize.holdQuaternion = new CANNON.Quaternion(
+    prize.body.quaternion.x,
+    prize.body.quaternion.y,
+    prize.body.quaternion.z,
+    prize.body.quaternion.w,
+  );
+  prize.carryVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
+  prize.carryVelocity.set(0, 0, 0);
+  prize.carryStartOffset = new CANNON.Vec3(prize.holdOffset.x, prize.holdOffset.y, prize.holdOffset.z);
+  prize.carryMaxRelativeDelta = 0;
+  prize.carryRelativeWarningShown = false;
+  game.lastCarryMaxRelativeDelta = 0;
+  syncHeldPrize(prize, 16);
 }
 
 function syncHeldPrize(prize, dt) {
-  if (!prize.body) return;
-  syncGripAnchors(dt);
-  clampVec3Length(prize.body.velocity, GRABBED_MAX_SPEED);
-  clampVec3Length(prize.body.angularVelocity, GRABBED_MAX_ANGULAR_SPEED);
+  if (!prize.body || prize.positionOwner !== "claw") return;
+
+  if (!prize.holdOffset) {
+    prize.holdOffset = new CANNON.Vec3(
+      prize.body.position.x - claw.x,
+      prize.body.position.y - claw.y,
+      prize.body.position.z - claw.z,
+    );
+  }
+  if (!prize.holdQuaternion) {
+    prize.holdQuaternion = new CANNON.Quaternion(
+      prize.body.quaternion.x,
+      prize.body.quaternion.y,
+      prize.body.quaternion.z,
+      prize.body.quaternion.w,
+    );
+  }
+
+  const seconds = Math.max(dt / 1000, 1 / 120);
+  const nextX = claw.x + prize.holdOffset.x;
+  const nextY = claw.y + prize.holdOffset.y;
+  const nextZ = claw.z + prize.holdOffset.z;
+  prize.carryVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
+  prize.carryVelocity.set(
+    (nextX - prize.body.position.x) / seconds,
+    (nextY - prize.body.position.y) / seconds,
+    (nextZ - prize.body.position.z) / seconds,
+  );
+
+  // In carrying state the claw is the only owner allowed to write prize position.
+  prize.body.type = CANNON.Body.KINEMATIC;
+  prize.body.mass = 0;
+  prize.body.collisionResponse = false;
+  prize.body.position.set(nextX, nextY, nextZ);
+  prize.body.previousPosition.copy(prize.body.position);
+  if (prize.body.interpolatedPosition) prize.body.interpolatedPosition.copy(prize.body.position);
+  prize.body.quaternion.set(
+    prize.holdQuaternion.x,
+    prize.holdQuaternion.y,
+    prize.holdQuaternion.z,
+    prize.holdQuaternion.w,
+  );
+  if (prize.body.previousQuaternion) prize.body.previousQuaternion.copy(prize.body.quaternion);
+  if (prize.body.interpolatedQuaternion) prize.body.interpolatedQuaternion.copy(prize.body.quaternion);
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.force.set(0, 0, 0);
+  prize.body.torque.set(0, 0, 0);
+  prize.body.aabbNeedsUpdate = true;
   prize.body.wakeUp();
+  assertCarryOffsetStable(prize);
   syncPrizeVisual(prize);
+}
+
+function assertCarryOffsetStable(prize) {
+  if (!prize.holdOffset || !prize.carryStartOffset) return;
+  const relativeX = prize.body.position.x - claw.x;
+  const relativeY = prize.body.position.y - claw.y;
+  const relativeZ = prize.body.position.z - claw.z;
+  const dx = relativeX - prize.carryStartOffset.x;
+  const dy = relativeY - prize.carryStartOffset.y;
+  const dz = relativeZ - prize.carryStartOffset.z;
+  const relativeDelta = Math.hypot(dx, dy, dz);
+  prize.carryMaxRelativeDelta = Math.max(prize.carryMaxRelativeDelta || 0, relativeDelta);
+  game.lastCarryMaxRelativeDelta = Math.max(game.lastCarryMaxRelativeDelta || 0, prize.carryMaxRelativeDelta);
+
+  if (
+    import.meta.env.DEV &&
+    relativeDelta > CARRY_RELATIVE_WARN_THRESHOLD &&
+    !prize.carryRelativeWarningShown
+  ) {
+    prize.carryRelativeWarningShown = true;
+    console.warn("Carried prize relative offset changed", {
+      relativeDelta,
+      prizeId: prize.id,
+      gameStage: game.state,
+      positionOwner: prize.positionOwner,
+    });
+  }
 }
 
 function releaseGrabbedPrize() {
   const prize = game.grabbedPrize;
   if (!prize) return;
 
+  syncHeldPrize(prize, 16);
   prize.grabbed = false;
-  prize.holdOffset = null;
-  prize.holdBlend = 0;
+  prize.positionOwner = "release-physics";
   if (!prize.body) return;
+  const releaseVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
   clearPrizeGrip(prize);
   prize.body.type = CANNON.Body.DYNAMIC;
   prize.body.mass = PRIZE_MASS;
@@ -719,10 +774,16 @@ function releaseGrabbedPrize() {
   prize.body.updateMassProperties();
   prize.body.linearDamping = 0.62;
   prize.body.angularDamping = 0.82;
-  prize.body.velocity.x += random(-0.2, 0.15);
-  prize.body.velocity.y -= 0.85;
-  prize.body.velocity.z += random(0.18, 0.55);
+  prize.body.velocity.set(
+    releaseVelocity.x * 0.18 + random(-0.2, 0.15),
+    Math.min(0.3, releaseVelocity.y * 0.12) - 0.85,
+    releaseVelocity.z * 0.18 + random(0.18, 0.55),
+  );
   prize.body.angularVelocity.set(random(-1.6, 1.6), random(-2.0, 2.0), random(-1.6, 1.6));
+  prize.holdOffset = null;
+  prize.holdBlend = 0;
+  prize.holdQuaternion = null;
+  prize.carryStartOffset = null;
   prize.body.wakeUp();
 }
 
@@ -762,37 +823,6 @@ function syncClawCollider(dt) {
   wakePrizesNearClaw(targets);
 }
 
-function syncGripAnchors(dt, teleport = false) {
-  if (!physics.gripAnchors.length) return;
-
-  const seconds = Math.max(dt / 1000, 1 / 120);
-  getGripAnchorTargets().forEach((target, index) => {
-    const body = physics.gripAnchors[index];
-    if (!body) return;
-
-    let dx = target.x - body.position.x;
-    let dy = target.y - body.position.y;
-    let dz = target.z - body.position.z;
-    const distance = Math.hypot(dx, dy, dz);
-    if (teleport || distance > 1.4) {
-      body.position.set(target.x, target.y, target.z);
-      body.previousPosition.copy(body.position);
-      body.velocity.set(0, 0, 0);
-    } else {
-      const maxStep = GRIP_ANCHOR_MAX_SPEED * seconds;
-      const ratio = distance > maxStep && distance > 0 ? maxStep / distance : 1;
-      dx *= ratio;
-      dy *= ratio;
-      dz *= ratio;
-      body.velocity.set(dx / seconds, dy / seconds, dz / seconds);
-      body.position.x += dx;
-      body.position.y += dy;
-      body.position.z += dz;
-    }
-    body.aabbNeedsUpdate = true;
-  });
-}
-
 function getClawColliderTargets(clawY = claw.y) {
   const targets = [{
     x: claw.x,
@@ -826,10 +856,6 @@ function getClawColliderTargets(clawY = claw.y) {
     });
   }
   return targets;
-}
-
-function getGripAnchorTargets() {
-  return getClawColliderTargets(claw.y).filter((target) => target.role.startsWith("tip"));
 }
 
 function constrainClawAgainstPrizes(dt) {
@@ -1287,6 +1313,7 @@ function resetGame() {
   game.attempts = [];
   game.awaitFistRelease = false;
   game.resultFlashMs = 0;
+  game.lastCarryMaxRelativeDelta = 0;
   input.rawX = 0.5;
   input.rawY = 0.5;
   input.x = 0.5;
@@ -1567,6 +1594,7 @@ function updateState(dt) {
       const success = Boolean(game.grabbedPrize);
       if (success) {
         game.grabbedPrize.collected = true;
+        game.grabbedPrize.positionOwner = "result";
         game.grabbedPrize.object.visible = false;
         if (game.grabbedPrize.body) game.grabbedPrize.body.collisionResponse = false;
         triggerResultEffect("success");
@@ -1616,6 +1644,7 @@ function resetRoundForReplay() {
   game.demoTime = 0;
   game.releaseStarted = false;
   game.clawContactMs = 0;
+  game.lastCarryMaxRelativeDelta = 0;
   game.round += 1;
   input.rawX = 0.5;
   input.rawY = 0.5;
@@ -1674,22 +1703,10 @@ function updateClaw(dt) {
 function updatePrizes(now) {
   sceneObjects.prizes.forEach((prize) => {
     if (prize.collected || !prize.object.visible) return;
-    if (prize.grabbed) {
-      stabilizeGrabbedPrize(prize);
-      syncPrizeVisual(prize);
-      return;
-    }
+    if (prize.grabbed) return;
     if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
     syncPrizeVisual(prize);
   });
-}
-
-function stabilizeGrabbedPrize(prize) {
-  if (!prize.body) return;
-  clampVec3Length(prize.body.velocity, GRABBED_MAX_SPEED);
-  clampVec3Length(prize.body.angularVelocity, GRABBED_MAX_ANGULAR_SPEED);
-  prize.body.linearDamping = 0.84;
-  prize.body.angularDamping = 0.94;
 }
 
 function pickPrize() {
@@ -1849,13 +1866,6 @@ function formatDuration(ms) {
   return `${Math.max(0, ms / 1000).toFixed(1)}s`;
 }
 
-function clampVec3Length(vec, maxLength) {
-  const length = vec.length();
-  if (length > maxLength && length > 0) {
-    vec.scale(maxLength / length, vec);
-  }
-}
-
 function worldXToInput(x) {
   return clamp(map(x, WORLD.xMin, WORLD.xMax, 0, 1), 0, 1);
 }
@@ -1922,6 +1932,15 @@ window.__clawDebug = {
       physicsBodies: physics.world ? physics.world.bodies.length : 0,
       clawColliderCount: physics.clawBodies.length,
       gripConstraintCount: game.grabbedPrize?.gripConstraints?.length || 0,
+      grabbedPositionOwner: game.grabbedPrize?.positionOwner || null,
+      carryMaxRelativeDelta: Number((game.grabbedPrize?.carryMaxRelativeDelta || game.lastCarryMaxRelativeDelta || 0).toFixed(6)),
+      carryVelocity: game.grabbedPrize?.carryVelocity
+        ? {
+            x: Number(game.grabbedPrize.carryVelocity.x.toFixed(3)),
+            y: Number(game.grabbedPrize.carryVelocity.y.toFixed(3)),
+            z: Number(game.grabbedPrize.carryVelocity.z.toFixed(3)),
+          }
+        : null,
       clawY: Number(claw.y.toFixed(3)),
       clawClosed: Number(claw.closed.toFixed(3)),
       grabbedPrizeY: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.position.y.toFixed(3)) : null,
