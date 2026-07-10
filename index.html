@@ -57,6 +57,15 @@
               <button id="result-action-button" type="button" class="primary-button">继续抓取</button>
             </div>
           </div>
+
+          <div id="celebration-overlay" class="celebration-overlay" aria-live="polite" aria-hidden="true">
+            <div id="celebration-player" class="celebration-player" aria-hidden="true"></div>
+            <div class="celebration-message">
+              <span>COLLECTION COMPLETE</span>
+              <strong>全部抓取完成</strong>
+              <p>正在整理奖品，马上回到初始状态。</p>
+            </div>
+          </div>
         </section>
 
         <section class="control-panel" aria-label="游戏状态和控制">
@@ -93,8 +102,7 @@
         </section>
 
         <div class="actions">
-          <button id="primary-button" type="button" class="primary-button" aria-label="开始游戏">开始游戏</button>
-          <button id="demo-button" type="button" class="secondary-button" aria-label="运行自动演示">自动演示</button>
+          <button id="primary-button" type="button" class="primary-button" aria-label="开始演示">开始演示</button>
           <button id="reset-button" type="button" class="ghost-button" aria-label="重置游戏">重置</button>
         </div>
 

@@ -636,9 +636,88 @@ h1 {
   color: var(--warn);
 }
 
+.celebration-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.985);
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.celebration-overlay::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    radial-gradient(circle at 50% 34%, rgba(91, 246, 207, 0.2), transparent 34%),
+    linear-gradient(180deg, rgba(3, 10, 14, 0.22), rgba(3, 10, 14, 0.64));
+}
+
+.celebration-overlay.is-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.celebration-player {
+  position: absolute;
+  width: min(86%, 760px);
+  height: min(70%, 520px);
+  filter: drop-shadow(0 24px 42px rgba(0, 0, 0, 0.36));
+}
+
+.celebration-player svg {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.celebration-message {
+  position: relative;
+  display: grid;
+  gap: 8px;
+  width: min(460px, 88%);
+  padding: 24px 28px;
+  border: 1px solid rgba(91, 246, 207, 0.42);
+  border-radius: 12px;
+  text-align: center;
+  background:
+    linear-gradient(180deg, rgba(8, 23, 27, 0.88), rgba(4, 12, 16, 0.82)),
+    rgba(0, 0, 0, 0.55);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.celebration-message span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+}
+
+.celebration-message strong {
+  color: var(--text);
+  font-size: clamp(30px, 5vw, 56px);
+  line-height: 1.05;
+  text-shadow: 0 4px 22px rgba(91, 246, 207, 0.28);
+}
+
+.celebration-message p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .actions {
   display: grid;
-  grid-template-columns: 1fr 0.8fr 0.55fr;
+  grid-template-columns: minmax(180px, 1fr) minmax(92px, 0.42fr);
   gap: 10px;
 }
 
@@ -876,10 +955,6 @@ code {
     order: 5;
   }
 
-  .primary-button {
-    grid-column: 1 / -1;
-  }
-
   button {
     min-height: 44px;
   }
@@ -910,5 +985,9 @@ code {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
+  }
+
+  .celebration-player {
+    display: none;
   }
 }

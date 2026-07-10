@@ -8,11 +8,13 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:flow": "node tests/flow-smoke.mjs",
-    "test:carry": "node tests/carry-audit.mjs"
+    "test:carry": "node tests/carry-audit.mjs",
+    "test:celebration": "node tests/celebration-flow.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",
     "cannon-es": "^0.20.0",
+    "lottie-web": "^5.13.0",
     "three": "^0.185.1",
     "vite": "^7.0.2"
   },

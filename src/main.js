@@ -1,4 +1,5 @@
 import "./styles.css";
+import lottie from "lottie-web";
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
@@ -32,8 +33,9 @@ const ui = {
   meterX: document.getElementById("meter-x"),
   meterY: document.getElementById("meter-y"),
   primary: document.getElementById("primary-button"),
-  demo: document.getElementById("demo-button"),
   reset: document.getElementById("reset-button"),
+  celebrationOverlay: document.getElementById("celebration-overlay"),
+  celebrationPlayer: document.getElementById("celebration-player"),
   scoreSummary: document.getElementById("score-summary"),
   scoreElapsed: document.getElementById("score-elapsed"),
   scoreRate: document.getElementById("score-rate"),
@@ -50,6 +52,8 @@ const STATES = {
   RETURNING: "returning",
   RELEASING: "releasing",
   RESULT: "result",
+  CELEBRATING: "celebrating",
+  RESETTING: "resetting",
 };
 
 const STATE_LABELS = {
@@ -61,6 +65,8 @@ const STATE_LABELS = {
   [STATES.RETURNING]: "回到出口",
   [STATES.RELEASING]: "放手结算",
   [STATES.RESULT]: "本轮结束",
+  [STATES.CELEBRATING]: "全部收集",
+  [STATES.RESETTING]: "准备重置",
 };
 
 const FLOW_STEPS = ["wait", "calibrate", "control", "drop", "result"];
@@ -73,6 +79,8 @@ const STEP_BY_STATE = {
   [STATES.RETURNING]: "drop",
   [STATES.RELEASING]: "result",
   [STATES.RESULT]: "result",
+  [STATES.CELEBRATING]: "result",
+  [STATES.RESETTING]: "wait",
 };
 
 const WORLD = {
@@ -111,11 +119,15 @@ const game = {
   releaseStarted: false,
   demoActive: false,
   demoTime: 0,
+  demoTarget: null,
   round: 0,
   sessionActive: false,
   sessionElapsedMs: 0,
   currentAttemptStartedMs: 0,
   attempts: [],
+  collectedPrizeIds: new Set(),
+  hasCelebratedCollection: false,
+  celebrationCount: 0,
   awaitFistRelease: false,
   cameraStatus: "loading",
   cameraProblem: "",
@@ -144,6 +156,7 @@ const HELD_CLAW_LIFT_SPEED = 0.00105;
 const HELD_CLAW_TRAVEL_SPEED = 0.00145;
 const CARRY_RELATIVE_WARN_THRESHOLD = 0.035;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
+const CELEBRATION_SRC_DEFAULT = "/animations/celebration-confetti.json";
 const physics = {
   world: null,
   prizeMaterial: null,
@@ -170,6 +183,13 @@ const positionAudit = {
   maxSourcesPerFrame: 0,
   invalidOwnerCount: 0,
 };
+
+let celebrationPlayer = null;
+let celebrationSource = CELEBRATION_SRC_DEFAULT;
+let celebrationLoadedSource = "";
+let celebrationRunId = 0;
+let celebrationPendingResolve = null;
+const celebrationTimers = new Set();
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -1227,7 +1247,7 @@ function enableDemoMode(reason) {
   game.inputMode = "demo";
   const friendly = formatCameraProblem(reason);
   setCameraStatus("demo", "已切换自动演示", friendly);
-  ui.cameraMessage.textContent = `演示模式：${friendly} 可点击自动演示验证流程。`;
+  ui.cameraMessage.textContent = `演示模式：${friendly} 可点击开始演示验证流程。`;
 }
 
 function setCameraStatus(status, message, problem = "") {
@@ -1372,8 +1392,9 @@ function drawHandOverlay(lm) {
 function readDemoInput(dt) {
   game.demoTime += dt;
   const t = game.demoTime;
-  const targetX = worldXToInput(DEMO_TARGET.x);
-  const targetY = worldZToInput(DEMO_TARGET.z);
+  const target = game.demoTarget || DEMO_TARGET;
+  const targetX = worldXToInput(target.x);
+  const targetY = worldZToInput(target.z);
   input.openPalm = t < 1250;
   input.fist = t > 4200 && t < 5100;
 
@@ -1388,6 +1409,27 @@ function readDemoInput(dt) {
     input.rawX = targetX;
     input.rawY = targetY;
   }
+}
+
+function chooseDemoTarget() {
+  const candidates = sceneObjects.prizes
+    .filter((item) => !item.collected && item.object.visible)
+    .map((item) => {
+      const position = item.body?.position || item.object.position || item.home;
+      return {
+        prize: item,
+        position,
+        distance: Math.hypot(position.x - DEMO_TARGET.x, position.z - DEMO_TARGET.z),
+      };
+    })
+    .sort((a, b) => a.distance - b.distance);
+  const prize = candidates[0]?.prize;
+  if (!prize) return { ...DEMO_TARGET };
+  const position = prize.body?.position || prize.object.position || prize.home;
+  return {
+    x: clamp(position.x, WORLD.xMin + 0.16, WORLD.xMax - 0.16),
+    z: clamp(position.z, WORLD.zMin + 0.16, WORLD.zMax - 0.16),
+  };
 }
 
 function setState(next) {
@@ -1427,7 +1469,174 @@ function recordAttempt(success) {
   return attempt;
 }
 
+function markPrizeCollected(prize) {
+  if (!prize || game.collectedPrizeIds.has(prize.id)) return false;
+  game.collectedPrizeIds.add(prize.id);
+  return maybeStartCollectionCelebration();
+}
+
+function maybeStartCollectionCelebration() {
+  const allCollected = sceneObjects.prizes.length > 0 && game.collectedPrizeIds.size >= sceneObjects.prizes.length;
+  if (!allCollected || game.hasCelebratedCollection) return false;
+  game.hasCelebratedCollection = true;
+  game.celebrationCount += 1;
+  startCollectionCelebration();
+  return true;
+}
+
+async function startCollectionCelebration() {
+  const runId = ++celebrationRunId;
+  game.demoActive = false;
+  game.demoTime = 0;
+  game.demoTarget = null;
+  input.fist = false;
+  input.openPalm = false;
+  setState(STATES.CELEBRATING);
+  updateUi();
+
+  const playResult = await playCelebrationAnimation(runId);
+  if (runId !== celebrationRunId || playResult === "cancelled") return;
+
+  const settleResult = await waitCelebrationDelay(650, runId);
+  if (runId !== celebrationRunId || settleResult === "cancelled") return;
+
+  setState(STATES.RESETTING);
+  updateUi();
+  const resetResult = await waitCelebrationDelay(360, runId);
+  if (runId !== celebrationRunId || resetResult === "cancelled") return;
+  resetGame();
+}
+
+async function playCelebrationAnimation(runId) {
+  showCelebrationOverlay();
+  game.resultFlashMs = 0;
+
+  if (prefersReducedMotion()) {
+    return waitCelebrationDelay(1200, runId);
+  }
+
+  try {
+    const player = await getCelebrationPlayer();
+    player.stop();
+    player.goToAndStop(0, true);
+
+    return new Promise((resolve) => {
+      let fallbackTimer = 0;
+      const settle = (result) => {
+        if (fallbackTimer) {
+          clearTimeout(fallbackTimer);
+          celebrationTimers.delete(fallbackTimer);
+        }
+        player.removeEventListener("complete", handleComplete);
+        player.removeEventListener("data_failed", handleLoadError);
+        if (celebrationPendingResolve === settle) celebrationPendingResolve = null;
+        resolve(result);
+      };
+      const handleComplete = () => settle("complete");
+      const handleLoadError = (event) => {
+        console.error("Celebration Lottie failed to load", event);
+        settle("load-error");
+      };
+
+      celebrationPendingResolve = settle;
+      player.addEventListener("complete", handleComplete);
+      player.addEventListener("data_failed", handleLoadError);
+      fallbackTimer = window.setTimeout(() => settle(runId === celebrationRunId ? "fallback" : "cancelled"), 4600);
+      celebrationTimers.add(fallbackTimer);
+      player.goToAndStop(0, true);
+      player.play();
+    });
+  } catch (error) {
+    console.error("Celebration Lottie could not start", error);
+    return waitCelebrationDelay(1200, runId);
+  }
+}
+
+async function getCelebrationPlayer() {
+  if (!celebrationPlayer || celebrationLoadedSource !== celebrationSource) {
+    if (celebrationPlayer) celebrationPlayer.destroy();
+    const animationData = await loadCelebrationAnimationData();
+    ui.celebrationPlayer.replaceChildren();
+    celebrationPlayer = lottie.loadAnimation({
+      container: ui.celebrationPlayer,
+      renderer: "svg",
+      animationData,
+      autoplay: false,
+      loop: false,
+      rendererSettings: {
+        preserveAspectRatio: "xMidYMid meet",
+        progressiveLoad: true,
+      },
+    });
+    celebrationLoadedSource = celebrationSource;
+  }
+  return celebrationPlayer;
+}
+
+async function loadCelebrationAnimationData() {
+  const response = await fetch(celebrationSource, { cache: "force-cache" });
+  if (!response.ok) throw new Error(`Celebration animation request failed: ${response.status} ${celebrationSource}`);
+  return response.json();
+}
+
+function waitCelebrationDelay(ms, runId) {
+  return new Promise((resolve) => {
+    const timerId = window.setTimeout(() => {
+      celebrationTimers.delete(timerId);
+      if (celebrationPendingResolve === settle) celebrationPendingResolve = null;
+      resolve(runId === celebrationRunId ? "done" : "cancelled");
+    }, ms);
+    const settle = (result) => {
+      clearTimeout(timerId);
+      celebrationTimers.delete(timerId);
+      if (celebrationPendingResolve === settle) celebrationPendingResolve = null;
+      resolve(result);
+    };
+    celebrationPendingResolve = settle;
+    celebrationTimers.add(timerId);
+  });
+}
+
+function showCelebrationOverlay() {
+  ui.celebrationOverlay.classList.add("is-visible");
+  ui.celebrationOverlay.setAttribute("aria-hidden", "false");
+}
+
+function hideCelebrationOverlay() {
+  ui.celebrationOverlay.classList.remove("is-visible");
+  ui.celebrationOverlay.setAttribute("aria-hidden", "true");
+  try {
+    celebrationPlayer?.stop();
+    celebrationPlayer?.goToAndStop?.(0, true);
+  } catch {
+    // Best-effort cleanup; the visual fallback still resets the game.
+  }
+}
+
+function cancelCelebrationFlow({ destroyPlayer = false } = {}) {
+  celebrationRunId += 1;
+  celebrationTimers.forEach((timerId) => clearTimeout(timerId));
+  celebrationTimers.clear();
+  if (celebrationPendingResolve) {
+    const resolve = celebrationPendingResolve;
+    celebrationPendingResolve = null;
+    resolve("cancelled");
+  }
+  hideCelebrationOverlay();
+  if (destroyPlayer && celebrationPlayer) {
+    celebrationPlayer.destroy();
+    celebrationPlayer = null;
+    celebrationLoadedSource = "";
+    ui.celebrationPlayer.replaceChildren();
+  }
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches || false;
+}
+
 function resetGame() {
+  cancelCelebrationFlow();
   setState(STATES.IDLE);
   clearEffects();
   game.result = "未开始";
@@ -1439,11 +1648,14 @@ function resetGame() {
   game.calibration = null;
   game.demoActive = false;
   game.demoTime = 0;
+  game.demoTarget = null;
   game.round += 1;
   game.sessionActive = false;
   game.sessionElapsedMs = 0;
   game.currentAttemptStartedMs = 0;
   game.attempts = [];
+  game.collectedPrizeIds.clear();
+  game.hasCelebratedCollection = false;
   game.awaitFistRelease = false;
   game.resultFlashMs = 0;
   game.lastCarryMaxRelativeDelta = 0;
@@ -1468,7 +1680,7 @@ function resetGame() {
   });
   ui.cameraMessage.textContent = game.inputMode === "camera"
     ? "摄像头已启用：张开手掌开始。"
-    : "可点击自动演示验证完整流程。";
+    : "可点击开始演示验证完整流程。";
   updateMessage();
   updateUi();
 }
@@ -1525,7 +1737,6 @@ function updatePresentationUi() {
   ui.primary.textContent = presentation.primaryLabel;
   ui.primary.disabled = presentation.primaryDisabled;
   ui.primary.setAttribute("aria-label", presentation.primaryLabel);
-  ui.demo.disabled = game.demoActive || ![STATES.IDLE, STATES.CONTROLLING].includes(game.state);
   ui.reset.disabled = false;
 
   ui.cameraCard.dataset.hand = presentation.handTone;
@@ -1565,12 +1776,14 @@ function getPresentationState() {
   const calibrating = game.state === STATES.IDLE && input.openPalm;
   const fistHolding = game.state === STATES.CONTROLLING && input.fist && !game.awaitFistRelease;
   const busy = [STATES.DROPPING, STATES.GRABBING, STATES.LIFTING, STATES.RETURNING, STATES.RELEASING].includes(game.state);
-  let instruction = "点击“开始游戏”并允许访问摄像头。";
+  let instruction = "点击“开始演示”体验流程，或用张开手掌开始摄像头控制。";
   let step = STEP_BY_STATE[game.state] || "wait";
 
   if (game.cameraStatus === "loading") instruction = "正在加载摄像头和手势模型。";
-  else if (game.inputMode === "demo" && !game.demoActive && game.state === STATES.IDLE) instruction = "摄像头不可用，可点击自动演示体验完整流程。";
+  else if (game.inputMode === "demo" && !game.demoActive && game.state === STATES.IDLE) instruction = "摄像头不可用，可点击开始演示体验完整流程。";
   else if (game.demoActive) instruction = "自动演示运行中，正在模拟手掌轨迹。";
+  else if (game.state === STATES.CELEBRATING) instruction = "全部娃娃已收集，正在播放庆祝动画。";
+  else if (game.state === STATES.RESETTING) instruction = "庆祝完成，正在恢复到初始状态。";
   else if (game.resultFlashMs > 0 && game.attempts.length) {
     instruction = game.result === "抓到了" ? "抓取成功，可以继续下一次。" : "差一点，调整位置后再试一次。";
     step = "result";
@@ -1627,21 +1840,27 @@ function getPresentationState() {
   if (game.state === STATES.IDLE) holdProgress = clamp(game.palmOpenMs / 900, 0, 1);
   if (game.state === STATES.CONTROLLING) holdProgress = clamp(game.fistMs / 280, 0, 1);
 
-  let primaryLabel = "开始游戏";
+  let primaryLabel = "开始演示";
   let primaryDisabled = false;
   if (game.cameraStatus === "loading") {
     primaryLabel = "模型加载中";
     primaryDisabled = true;
-  } else if (game.cameraStatus === "demo") {
-    primaryLabel = game.demoActive ? "演示中" : "开始演示";
-    primaryDisabled = game.demoActive;
   } else if (game.cameraStatus === "error") {
     primaryLabel = "重新授权摄像头";
+  } else if (game.demoActive) {
+    primaryLabel = "演示中";
+    primaryDisabled = true;
+  } else if (game.state === STATES.CELEBRATING) {
+    primaryLabel = "庆祝中";
+    primaryDisabled = true;
+  } else if (game.state === STATES.RESETTING) {
+    primaryLabel = "正在重置";
+    primaryDisabled = true;
   } else if (busy) {
     primaryLabel = "抓取中";
     primaryDisabled = true;
-  } else if (game.attempts.length > 0) {
-    primaryLabel = "继续抓取";
+  } else if (![STATES.IDLE, STATES.CONTROLLING].includes(game.state)) {
+    primaryDisabled = true;
   }
 
   return {
@@ -1660,9 +1879,11 @@ function getPresentationState() {
 
 function updateMessage() {
   if (game.state === STATES.IDLE) {
-    setMessage("张开手掌开始", "无摄像头可点自动演示");
+    setMessage("张开手掌开始", "也可点开始演示");
   } else if (game.state === STATES.RESULT) {
-    setMessage(game.result, "张开手掌或点自动演示再来一局");
+    setMessage(game.result, "张开手掌或点开始演示继续");
+  } else if (game.state === STATES.CELEBRATING) {
+    setMessage("全部收集", "庆祝完成后自动重置");
   } else if (sceneObjects.messageSprite) {
     sceneObjects.machine.remove(sceneObjects.messageSprite);
     sceneObjects.messageSprite.material.map.dispose();
@@ -1725,20 +1946,24 @@ function updateState(dt) {
     }
     if (game.stateTime > 760) {
       const success = Boolean(game.grabbedPrize);
+      let celebrationStarted = false;
       if (success) {
         game.grabbedPrize.collected = true;
         game.grabbedPrize.positionOwner = "result";
         game.grabbedPrize.object.visible = false;
         if (game.grabbedPrize.body) game.grabbedPrize.body.collisionResponse = false;
         triggerResultEffect("success");
+        celebrationStarted = markPrizeCollected(game.grabbedPrize);
       } else {
         triggerResultEffect("miss");
       }
       recordAttempt(success);
       game.demoActive = false;
+      game.demoTime = 0;
+      game.demoTarget = null;
       ui.cameraMessage.textContent = game.inputMode === "camera"
         ? "本次抓取已记录，可继续移动手掌。"
-        : "本次抓取已记录，可再次点击自动演示。";
+        : "本次抓取已记录，可再次点击开始演示。";
       game.awaitFistRelease = true;
       game.grabbedPrize = null;
       game.releaseStarted = false;
@@ -1746,13 +1971,18 @@ function updateState(dt) {
       claw.targetY = WORLD.clawHomeY;
       claw.targetZ = 0;
       claw.closed = 0;
-      setState(STATES.CONTROLLING);
+      if (!celebrationStarted) setState(STATES.CONTROLLING);
     }
   } else if (game.state === STATES.RESULT) {
     claw.targetX = 0;
     claw.targetY = WORLD.clawHomeY;
     claw.targetZ = 0;
     updateStartGesture(dt, 1000, true);
+  } else if (game.state === STATES.CELEBRATING || game.state === STATES.RESETTING) {
+    claw.targetX = 0;
+    claw.targetY = WORLD.clawHomeY;
+    claw.targetZ = 0;
+    claw.closed = approach(claw.closed, 0, dt * 0.004);
   }
 }
 
@@ -1769,16 +1999,20 @@ function updateStartGesture(dt, holdMs, shouldResetRound) {
 }
 
 function resetRoundForReplay() {
+  cancelCelebrationFlow();
   clearEffects();
   game.grabbedPrize = null;
   game.fistMs = 0;
   game.calibration = null;
   game.demoActive = false;
   game.demoTime = 0;
+  game.demoTarget = null;
   game.releaseStarted = false;
   game.clawContactMs = 0;
   game.lastCarryMaxRelativeDelta = 0;
   game.round += 1;
+  game.collectedPrizeIds.clear();
+  game.hasCelebratedCollection = false;
   input.rawX = 0.5;
   input.rawY = 0.5;
   input.x = 0.5;
@@ -2027,8 +2261,13 @@ window.__clawDebug = {
     resetGame();
   },
   startDemo() {
-    if (game.state !== STATES.IDLE && game.state !== STATES.CONTROLLING) return;
+    if (game.demoActive || (game.state !== STATES.IDLE && game.state !== STATES.CONTROLLING)) return;
+    if (game.state === STATES.CONTROLLING && game.collectedPrizeIds.size >= sceneObjects.prizes.length) {
+      maybeStartCollectionCelebration();
+      return;
+    }
     if (!game.sessionActive || game.state === STATES.IDLE) resetGame();
+    game.demoTarget = chooseDemoTarget();
     game.demoActive = true;
     game.inputMode = game.inputMode === "camera" ? "camera" : "demo";
     game.demoTime = 0;
@@ -2062,6 +2301,11 @@ window.__clawDebug = {
       round: game.round,
       attempts: game.attempts.length,
       successes: game.attempts.filter((attempt) => attempt.success).length,
+      collectedCount: game.collectedPrizeIds.size,
+      visiblePrizeCount: sceneObjects.prizes.filter((prize) => prize.object.visible && !prize.collected).length,
+      celebrationCount: game.celebrationCount,
+      hasCelebratedCollection: game.hasCelebratedCollection,
+      celebrationVisible: ui.celebrationOverlay.classList.contains("is-visible"),
       sessionElapsedMs: Math.round(game.sessionElapsedMs),
       latestAttempt: game.attempts.at(-1) || null,
       canvasPainted: true,
@@ -2146,29 +2390,38 @@ window.__clawDebug = {
       clawColliderCount: physics.clawBodies.length,
     };
   },
+  collectAllPrizesForTest() {
+    if (game.hasCelebratedCollection) return window.__clawDebug.getState();
+    startSession();
+    sceneObjects.prizes.forEach((prize) => {
+      prize.collected = true;
+      prize.grabbed = false;
+      prize.positionOwner = "result";
+      prize.object.visible = false;
+      if (prize.body) prize.body.collisionResponse = false;
+      game.collectedPrizeIds.add(prize.id);
+    });
+    maybeStartCollectionCelebration();
+    return window.__clawDebug.getState();
+  },
+  setCelebrationSourceForTest(src) {
+    celebrationSource = src || CELEBRATION_SRC_DEFAULT;
+    if (celebrationPlayer) {
+      celebrationPlayer.destroy();
+      celebrationPlayer = null;
+    }
+    celebrationLoadedSource = "";
+    ui.celebrationPlayer.replaceChildren();
+  },
 };
 
 function handlePrimaryAction() {
   if (game.cameraStatus === "loading") return;
-  if (game.cameraStatus === "error" || game.cameraStatus === "demo") {
-    if (game.cameraStatus === "error") {
-      retryCamera();
-      return;
-    }
-    window.__clawDebug.startDemo();
+  if (game.cameraStatus === "error") {
+    retryCamera();
     return;
   }
-  if (game.inputMode !== "camera") {
-    window.__clawDebug.startDemo();
-    return;
-  }
-  if (game.resultFlashMs > 0) {
-    game.resultFlashMs = 0;
-    return;
-  }
-  ui.cameraMessage.textContent = game.state === STATES.IDLE
-    ? "请张开手掌并保持 1 秒开始游戏。"
-    : "继续移动手掌，握拳并保持即可下爪。";
+  window.__clawDebug.startDemo();
 }
 
 function handleResultAction() {
@@ -2176,29 +2429,24 @@ function handleResultAction() {
   game.resultFlashMs = 0;
 }
 
-function handleDemoAction() {
-  window.__clawDebug.startDemo();
-}
-
 function cleanupPageRuntime() {
   if (animationFrameId) {
     cancelAnimationFrame(animationFrameId);
     animationFrameId = 0;
   }
+  cancelCelebrationFlow({ destroyPlayer: true });
   stopCameraStream();
   window.removeEventListener("resize", resizeRenderer);
   window.removeEventListener("beforeunload", cleanupPageRuntime);
   ui.primary.removeEventListener("click", handlePrimaryAction);
   ui.resultAction.removeEventListener("click", handleResultAction);
   ui.cameraRetry.removeEventListener("click", retryCamera);
-  ui.demo.removeEventListener("click", handleDemoAction);
   ui.reset.removeEventListener("click", resetGame);
 }
 
 ui.primary.addEventListener("click", handlePrimaryAction);
 ui.resultAction.addEventListener("click", handleResultAction);
 ui.cameraRetry.addEventListener("click", retryCamera);
-ui.demo.addEventListener("click", handleDemoAction);
 ui.reset.addEventListener("click", resetGame);
 window.addEventListener("beforeunload", cleanupPageRuntime);
 
