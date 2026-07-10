@@ -13,10 +13,25 @@ const ui = {
   state: document.getElementById("state-label"),
   input: document.getElementById("input-label"),
   gesture: document.getElementById("gesture-label"),
+  gestureIcon: document.getElementById("gesture-icon"),
+  gestureSubtext: document.getElementById("gesture-subtext"),
+  holdRing: document.getElementById("hold-ring"),
   result: document.getElementById("result-label"),
+  resultOverlay: document.getElementById("result-overlay"),
+  resultBadge: document.getElementById("result-badge"),
+  resultTitle: document.getElementById("result-title"),
+  resultText: document.getElementById("result-text"),
+  resultAction: document.getElementById("result-action-button"),
+  currentInstruction: document.getElementById("current-instruction"),
+  targetReticle: document.getElementById("target-reticle"),
+  cameraCard: document.getElementById("camera-card"),
   cameraMessage: document.getElementById("camera-message"),
+  cameraStatusDot: document.getElementById("camera-status-dot"),
+  cameraStatusText: document.getElementById("camera-status-text"),
+  cameraRetry: document.getElementById("camera-retry-button"),
   meterX: document.getElementById("meter-x"),
   meterY: document.getElementById("meter-y"),
+  primary: document.getElementById("primary-button"),
   demo: document.getElementById("demo-button"),
   reset: document.getElementById("reset-button"),
   scoreSummary: document.getElementById("score-summary"),
@@ -46,6 +61,18 @@ const STATE_LABELS = {
   [STATES.RETURNING]: "回到出口",
   [STATES.RELEASING]: "放手结算",
   [STATES.RESULT]: "本轮结束",
+};
+
+const FLOW_STEPS = ["wait", "calibrate", "control", "drop", "result"];
+const STEP_BY_STATE = {
+  [STATES.IDLE]: "wait",
+  [STATES.CONTROLLING]: "control",
+  [STATES.DROPPING]: "drop",
+  [STATES.GRABBING]: "drop",
+  [STATES.LIFTING]: "drop",
+  [STATES.RETURNING]: "drop",
+  [STATES.RELEASING]: "result",
+  [STATES.RESULT]: "result",
 };
 
 const WORLD = {
@@ -90,6 +117,10 @@ const game = {
   currentAttemptStartedMs: 0,
   attempts: [],
   awaitFistRelease: false,
+  cameraStatus: "loading",
+  cameraProblem: "",
+  lastHandSeenAt: 0,
+  resultFlashMs: 0,
 };
 
 const claw = {
@@ -1001,6 +1032,7 @@ function roundedCanvasRect(c, x, y, w, h, r) {
 }
 
 async function initCameraAndModel() {
+  setCameraStatus("loading", "正在请求摄像头权限...");
   const secure = window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (!secure) throw new Error("摄像头需要 HTTPS 或 localhost 环境。");
   if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前浏览器不支持摄像头 API。");
@@ -1013,6 +1045,7 @@ async function initCameraAndModel() {
   await video.play();
   cameraStarted = true;
 
+  setCameraStatus("loading", "摄像头已连接，正在加载手势模型...");
   const resolver = await FilesetResolver.forVisionTasks("/assets/mediapipe/wasm");
   handLandmarker = await HandLandmarker.createFromOptions(resolver, {
     baseOptions: {
@@ -1027,12 +1060,66 @@ async function initCameraAndModel() {
   });
 
   game.inputMode = "camera";
+  setCameraStatus("ready", "摄像头已连接");
   ui.cameraMessage.textContent = "摄像头已启用：张开手掌开始。";
 }
 
 function enableDemoMode(reason) {
   game.inputMode = "demo";
-  ui.cameraMessage.textContent = `演示模式：${reason} 可点击自动演示验证流程。`;
+  const friendly = formatCameraProblem(reason);
+  setCameraStatus("demo", "已切换自动演示", friendly);
+  ui.cameraMessage.textContent = `演示模式：${friendly} 可点击自动演示验证流程。`;
+}
+
+function setCameraStatus(status, message, problem = "") {
+  game.cameraStatus = status;
+  game.cameraProblem = problem;
+  if (ui.cameraStatusText) ui.cameraStatusText.textContent = message;
+  if (ui.cameraStatusText?.parentElement) ui.cameraStatusText.parentElement.dataset.tone = status;
+  if (ui.cameraCard) {
+    ui.cameraCard.classList.toggle("camera-card--loading", status === "loading");
+    ui.cameraCard.classList.toggle("camera-card--error", status === "error");
+    ui.cameraCard.classList.toggle("camera-card--demo", status === "demo");
+    ui.cameraCard.dataset.live = status === "ready" ? "true" : "false";
+  }
+}
+
+function formatCameraProblem(reason = "") {
+  if (/denied|permission|权限|notallowed/i.test(reason)) {
+    return "摄像头权限被拒绝，请在浏览器地址栏重新允许访问。";
+  }
+  if (/notfound|device not found|找不到|no camera|未找到/i.test(reason)) {
+    return "没有检测到可用摄像头。";
+  }
+  if (/notreadable|track|占用|busy/i.test(reason)) {
+    return "摄像头可能被其他程序占用，请关闭占用后重试。";
+  }
+  if (/https|secure/i.test(reason)) {
+    return "摄像头需要 HTTPS 或 localhost 环境。";
+  }
+  if (/model|landmarker|wasm|模型/i.test(reason)) {
+    return "手势模型加载失败，请刷新页面或检查静态资源。";
+  }
+  return reason || "摄像头读取失败。";
+}
+
+function stopCameraStream() {
+  if (!video.srcObject) return;
+  video.srcObject.getTracks().forEach((track) => track.stop());
+  video.srcObject = null;
+  cameraStarted = false;
+}
+
+async function retryCamera() {
+  stopCameraStream();
+  game.inputMode = "loading";
+  try {
+    await initCameraAndModel();
+  } catch (error) {
+    console.error(error);
+    setCameraStatus("error", "摄像头不可用", formatCameraProblem(error.message));
+    enableDemoMode(error.message || "摄像头不可用。");
+  }
 }
 
 function fingerExtended(lm, tip, pip, mcp) {
@@ -1068,7 +1155,15 @@ function toMirroredPalmCenter(palmCenter) {
 
 function readCameraInput() {
   if (!handLandmarker || !cameraStarted || video.readyState < 2) return;
-  const result = handLandmarker.detectForVideo(video, performance.now());
+  let result;
+  try {
+    result = handLandmarker.detectForVideo(video, performance.now());
+  } catch (error) {
+    console.error(error);
+    game.handPresent = false;
+    setCameraStatus("error", "摄像头读取失败", "摄像头画面读取失败，请重试。");
+    return;
+  }
   handCtx.clearRect(0, 0, handOverlay.width, handOverlay.height);
 
   if (!result.landmarks?.length) {
@@ -1082,6 +1177,7 @@ function readCameraInput() {
   const hand = classifyHand(lm);
   const mirroredPalmCenter = toMirroredPalmCenter(hand.palmCenter);
   game.handPresent = true;
+  game.lastHandSeenAt = performance.now();
   input.openPalm = hand.openPalm;
   input.fist = hand.fist;
 
@@ -1168,6 +1264,7 @@ function recordAttempt(success) {
   game.attempts.push(attempt);
   game.result = success ? "抓到了" : "差一点";
   game.currentAttemptStartedMs = 0;
+  game.resultFlashMs = 3600;
   return attempt;
 }
 
@@ -1189,6 +1286,7 @@ function resetGame() {
   game.currentAttemptStartedMs = 0;
   game.attempts = [];
   game.awaitFistRelease = false;
+  game.resultFlashMs = 0;
   input.rawX = 0.5;
   input.rawY = 0.5;
   input.x = 0.5;
@@ -1208,6 +1306,9 @@ function resetGame() {
     prize.collected = false;
     resetPrizePhysics(prize);
   });
+  ui.cameraMessage.textContent = game.inputMode === "camera"
+    ? "摄像头已启用：张开手掌开始。"
+    : "可点击自动演示验证完整流程。";
   updateMessage();
   updateUi();
 }
@@ -1219,11 +1320,11 @@ function updateUi() {
     : game.inputMode === "camera"
       ? "摄像头"
       : "演示模式";
-  ui.gesture.textContent = input.fist ? "攥拳" : input.openPalm ? "张开手掌" : game.handPresent ? "手已入镜" : "未检测";
   ui.result.textContent = game.result;
   ui.meterX.value = input.x;
   ui.meterY.value = input.y;
   updateScoreboard();
+  updatePresentationUi();
 }
 
 function updateScoreboard() {
@@ -1253,6 +1354,150 @@ function updateScoreboard() {
   }));
 }
 
+function updatePresentationUi() {
+  const presentation = getPresentationState();
+  ui.currentInstruction.textContent = presentation.instruction;
+  ui.gesture.textContent = presentation.gestureTitle;
+  ui.gestureSubtext.textContent = presentation.gestureSubtext;
+  ui.gestureIcon.textContent = presentation.gestureIcon;
+  ui.gestureIcon.dataset.tone = presentation.gestureTone;
+  ui.holdRing.style.setProperty("--progress", `${presentation.holdProgress * 360}deg`);
+  ui.primary.textContent = presentation.primaryLabel;
+  ui.primary.disabled = presentation.primaryDisabled;
+  ui.primary.setAttribute("aria-label", presentation.primaryLabel);
+  ui.demo.disabled = game.demoActive || ![STATES.IDLE, STATES.CONTROLLING].includes(game.state);
+  ui.reset.disabled = false;
+
+  ui.cameraCard.dataset.hand = presentation.handTone;
+  if (game.cameraProblem && game.cameraStatus !== "ready") ui.cameraMessage.textContent = game.cameraProblem;
+
+  const step = presentation.step;
+  const activeIndex = FLOW_STEPS.indexOf(step);
+  document.querySelectorAll(".progress-steps li").forEach((item, index) => {
+    item.classList.toggle("is-active", item.dataset.step === step);
+    item.classList.toggle("is-done", activeIndex > index);
+  });
+
+  const reticleVisible = [STATES.CONTROLLING, STATES.DROPPING, STATES.GRABBING].includes(game.state);
+  const reticleX = 10 + input.x * 80;
+  const reticleY = 24 + input.y * 56;
+  ui.targetReticle.classList.toggle("is-visible", reticleVisible);
+  ui.targetReticle.style.left = `${reticleX}%`;
+  ui.targetReticle.style.top = `${reticleY}%`;
+
+  const latest = game.attempts.at(-1);
+  const showResult = game.resultFlashMs > 0 && latest;
+  ui.resultOverlay.classList.toggle("is-visible", Boolean(showResult));
+  ui.resultOverlay.setAttribute("aria-hidden", showResult ? "false" : "true");
+  if (showResult) {
+    ui.resultBadge.textContent = latest.success ? "SUCCESS" : "TRY AGAIN";
+    ui.resultTitle.textContent = latest.success ? "抓取成功" : "差一点，再试一次";
+    ui.resultText.textContent = latest.success
+      ? `第 ${latest.index} 次抓取成功，继续移动手掌可以再抓一次。`
+      : `第 ${latest.index} 次没有抓稳，调整位置后再握拳。`;
+  }
+}
+
+function getPresentationState() {
+  const recentlySeen = performance.now() - game.lastHandSeenAt < 850;
+  const handVisible = game.handPresent || recentlySeen;
+  const handStable = game.handPresent && (input.openPalm || input.fist);
+  const calibrating = game.state === STATES.IDLE && input.openPalm;
+  const fistHolding = game.state === STATES.CONTROLLING && input.fist && !game.awaitFistRelease;
+  const busy = [STATES.DROPPING, STATES.GRABBING, STATES.LIFTING, STATES.RETURNING, STATES.RELEASING].includes(game.state);
+  let instruction = "点击“开始游戏”并允许访问摄像头。";
+  let step = STEP_BY_STATE[game.state] || "wait";
+
+  if (game.cameraStatus === "loading") instruction = "正在加载摄像头和手势模型。";
+  else if (game.inputMode === "demo" && !game.demoActive && game.state === STATES.IDLE) instruction = "摄像头不可用，可点击自动演示体验完整流程。";
+  else if (game.demoActive) instruction = "自动演示运行中，正在模拟手掌轨迹。";
+  else if (game.resultFlashMs > 0 && game.attempts.length) {
+    instruction = game.result === "抓到了" ? "抓取成功，可以继续下一次。" : "差一点，调整位置后再试一次。";
+    step = "result";
+  } else if (calibrating) {
+    instruction = "张开手掌并保持，正在完成校准。";
+    step = "calibrate";
+  } else if (game.state === STATES.IDLE) instruction = "将手掌放入画面，张开手掌并保持 1 秒。";
+  else if (fistHolding) instruction = "握拳保持，达到进度后自动下爪。";
+  else if (game.awaitFistRelease) instruction = "请先张开手掌，再进行下一次抓取。";
+  else if (game.state === STATES.CONTROLLING && !handVisible && game.inputMode === "camera") instruction = "请将手掌移回摄像头画面。";
+  else if (game.state === STATES.CONTROLLING && game.inputMode === "camera" && !handStable) instruction = "请正对摄像头，让手掌清晰可见。";
+  else if (game.state === STATES.CONTROLLING) instruction = "移动手掌控制抓手位置，握拳并保持下爪。";
+  else if (busy) instruction = "抓手正在自动完成抓取、回收和放奖。";
+
+  let gestureTitle = "未识别";
+  let gestureSubtext = "将手掌放入摄像头画面";
+  let gestureIcon = "○";
+  let gestureTone = "idle";
+  let handTone = "lost";
+  let holdProgress = 0;
+
+  if (game.demoActive) {
+    gestureTitle = input.fist ? "模拟握拳" : input.openPalm ? "模拟张开" : "模拟移动";
+    gestureSubtext = "自动演示正在控制抓手";
+    gestureIcon = input.fist ? "●" : "◌";
+    gestureTone = "ready";
+    handTone = "stable";
+  } else if (input.fist) {
+    gestureTitle = game.awaitFistRelease ? "已锁定" : "握拳";
+    gestureSubtext = game.awaitFistRelease ? "松开后可继续抓取" : "保持到 100% 触发下爪";
+    gestureIcon = "●";
+    gestureTone = game.awaitFistRelease ? "locked" : "ready";
+    handTone = "stable";
+  } else if (input.openPalm) {
+    gestureTitle = game.state === STATES.IDLE ? "张开手掌" : "手掌已就绪";
+    gestureSubtext = game.state === STATES.IDLE ? "保持完成校准" : "移动手掌控制抓手";
+    gestureIcon = "◌";
+    gestureTone = "ready";
+    handTone = "stable";
+  } else if (game.handPresent) {
+    gestureTitle = "识别不稳定";
+    gestureSubtext = "请让手掌完整入镜";
+    gestureIcon = "◇";
+    gestureTone = "warn";
+    handTone = "unstable";
+  } else if (recentlySeen) {
+    gestureTitle = "短暂丢失";
+    gestureSubtext = "请保持手掌在画面内";
+    gestureIcon = "◇";
+    gestureTone = "warn";
+    handTone = "unstable";
+  }
+
+  if (game.state === STATES.IDLE) holdProgress = clamp(game.palmOpenMs / 900, 0, 1);
+  if (game.state === STATES.CONTROLLING) holdProgress = clamp(game.fistMs / 280, 0, 1);
+
+  let primaryLabel = "开始游戏";
+  let primaryDisabled = false;
+  if (game.cameraStatus === "loading") {
+    primaryLabel = "模型加载中";
+    primaryDisabled = true;
+  } else if (game.cameraStatus === "demo") {
+    primaryLabel = game.demoActive ? "演示中" : "开始演示";
+    primaryDisabled = game.demoActive;
+  } else if (game.cameraStatus === "error") {
+    primaryLabel = "重新授权摄像头";
+  } else if (busy) {
+    primaryLabel = "抓取中";
+    primaryDisabled = true;
+  } else if (game.attempts.length > 0) {
+    primaryLabel = "继续抓取";
+  }
+
+  return {
+    instruction,
+    step,
+    gestureTitle,
+    gestureSubtext,
+    gestureIcon,
+    gestureTone,
+    handTone,
+    holdProgress,
+    primaryLabel,
+    primaryDisabled,
+  };
+}
+
 function updateMessage() {
   if (game.state === STATES.IDLE) {
     setMessage("张开手掌开始", "无摄像头可点自动演示");
@@ -1269,6 +1514,7 @@ function updateMessage() {
 function updateState(dt) {
   game.stateTime += dt;
   if (game.sessionActive) game.sessionElapsedMs += dt;
+  if (game.resultFlashMs > 0) game.resultFlashMs = Math.max(0, game.resultFlashMs - dt);
 
   if (game.state === STATES.IDLE) {
     updateStartGesture(dt, 900, false);
@@ -1734,6 +1980,35 @@ window.__clawDebug = {
   },
 };
 
+function handlePrimaryAction() {
+  if (game.cameraStatus === "loading") return;
+  if (game.cameraStatus === "error" || game.cameraStatus === "demo") {
+    if (game.cameraStatus === "error") {
+      retryCamera();
+      return;
+    }
+    window.__clawDebug.startDemo();
+    return;
+  }
+  if (game.inputMode !== "camera") {
+    window.__clawDebug.startDemo();
+    return;
+  }
+  if (game.resultFlashMs > 0) {
+    game.resultFlashMs = 0;
+    return;
+  }
+  ui.cameraMessage.textContent = game.state === STATES.IDLE
+    ? "请张开手掌并保持 1 秒开始游戏。"
+    : "继续移动手掌，握拳并保持即可下爪。";
+}
+
+ui.primary.addEventListener("click", handlePrimaryAction);
+ui.resultAction.addEventListener("click", () => {
+  if (game.inputMode === "demo") window.__clawDebug.startDemo();
+  game.resultFlashMs = 0;
+});
+ui.cameraRetry.addEventListener("click", retryCamera);
 ui.demo.addEventListener("click", () => window.__clawDebug.startDemo());
 ui.reset.addEventListener("click", resetGame);
 
