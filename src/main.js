@@ -155,6 +155,22 @@ const physics = {
   maxSubSteps: 5,
 };
 
+const positionAudit = {
+  active: false,
+  frame: 0,
+  frames: [],
+  samples: 0,
+  stateSwitches: 0,
+  lastToyState: null,
+  minRelativeX: Infinity,
+  maxRelativeX: -Infinity,
+  minRelativeY: Infinity,
+  maxRelativeY: -Infinity,
+  maxRelativeDelta: 0,
+  maxSourcesPerFrame: 0,
+  invalidOwnerCount: 0,
+};
+
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -222,6 +238,7 @@ const PRIZE_ASSETS = [
 
 let handLandmarker = null;
 let cameraStarted = false;
+let animationFrameId = 0;
 
 scene.add(sceneObjects.root);
 sceneObjects.root.add(sceneObjects.machine);
@@ -469,8 +486,9 @@ async function loadPrizeModels() {
     selected.map(async (prize, index) => {
       const gltf = await loader.loadAsync(PRIZE_ASSETS[index % PRIZE_ASSETS.length]);
       const model = gltf.scene;
+      const originalHome = prize.home.clone();
       normalizeModel(model, 0.82);
-      model.position.copy(prize.object.position);
+      model.position.copy(originalHome);
       model.rotation.y = random(-0.4, 0.4);
       model.traverse((child) => {
         if (child.isMesh) {
@@ -481,7 +499,7 @@ async function loadPrizeModels() {
       sceneObjects.machine.add(model);
       sceneObjects.machine.remove(prize.object);
       prize.object = model;
-      prize.home = model.position.clone();
+      prize.home.copy(originalHome);
       prize.radius = 0.5;
       syncPrizeVisual(prize);
     }),
@@ -598,7 +616,7 @@ function createPrizeBody(prize) {
   return body;
 }
 
-function syncPrizeVisual(prize) {
+function syncPrizeVisual(prize, source = prize.positionOwner === "claw" ? "claw-carry" : "physics-sync") {
   if (!prize.body) return;
   prize.object.position.set(
     prize.body.position.x,
@@ -611,6 +629,120 @@ function syncPrizeVisual(prize) {
     prize.body.quaternion.z,
     prize.body.quaternion.w,
   );
+  recordPrizePositionWrite(source, prize);
+}
+
+function resetPositionAudit() {
+  positionAudit.frame = 0;
+  positionAudit.frames = [];
+  positionAudit.samples = 0;
+  positionAudit.stateSwitches = 0;
+  positionAudit.lastToyState = null;
+  positionAudit.minRelativeX = Infinity;
+  positionAudit.maxRelativeX = -Infinity;
+  positionAudit.minRelativeY = Infinity;
+  positionAudit.maxRelativeY = -Infinity;
+  positionAudit.maxRelativeDelta = 0;
+  positionAudit.maxSourcesPerFrame = 0;
+  positionAudit.invalidOwnerCount = 0;
+}
+
+function beginAuditFrame() {
+  positionAudit.frame += 1;
+}
+
+function recordPrizePositionWrite(source, prize) {
+  if (!positionAudit.active || !game.grabbedPrize || prize !== game.grabbedPrize) return;
+  const carryingStage = [STATES.LIFTING, STATES.RETURNING].includes(game.state) || prize.positionOwner === "claw";
+  if (!carryingStage) return;
+
+  let frame = positionAudit.frames.at(-1);
+  if (!frame || frame.frame !== positionAudit.frame) {
+    frame = {
+      frame: positionAudit.frame,
+      sources: [],
+      writeCount: 0,
+      toyState: prize.positionOwner,
+      gameStage: game.state,
+      x: 0,
+      y: 0,
+      z: 0,
+      relativeX: 0,
+      relativeY: 0,
+      relativeZ: 0,
+      relativeDelta: 0,
+      sampled: false,
+    };
+    positionAudit.frames.push(frame);
+  }
+
+  frame.writeCount += 1;
+  if (!frame.sources.includes(source)) frame.sources.push(source);
+  positionAudit.maxSourcesPerFrame = Math.max(positionAudit.maxSourcesPerFrame, frame.sources.length);
+  if (prize.positionOwner !== "claw") positionAudit.invalidOwnerCount += 1;
+
+  const relativeX = prize.body.position.x - claw.x;
+  const relativeY = prize.body.position.y - claw.y;
+  const relativeZ = prize.body.position.z - claw.z;
+  const start = prize.carryStartOffset || new CANNON.Vec3(relativeX, relativeY, relativeZ);
+  const relativeDelta = Math.hypot(relativeX - start.x, relativeY - start.y, relativeZ - start.z);
+
+  frame.toyState = prize.positionOwner;
+  frame.gameStage = game.state;
+  frame.x = prize.body.position.x;
+  frame.y = prize.body.position.y;
+  frame.z = prize.body.position.z;
+  frame.relativeX = relativeX;
+  frame.relativeY = relativeY;
+  frame.relativeZ = relativeZ;
+  frame.relativeDelta = relativeDelta;
+
+  if (!frame.sampled) {
+    frame.sampled = true;
+    positionAudit.samples += 1;
+    if (positionAudit.lastToyState && positionAudit.lastToyState !== prize.positionOwner) {
+      positionAudit.stateSwitches += 1;
+    }
+    positionAudit.lastToyState = prize.positionOwner;
+  }
+  positionAudit.minRelativeX = Math.min(positionAudit.minRelativeX, relativeX);
+  positionAudit.maxRelativeX = Math.max(positionAudit.maxRelativeX, relativeX);
+  positionAudit.minRelativeY = Math.min(positionAudit.minRelativeY, relativeY);
+  positionAudit.maxRelativeY = Math.max(positionAudit.maxRelativeY, relativeY);
+  positionAudit.maxRelativeDelta = Math.max(positionAudit.maxRelativeDelta, relativeDelta);
+}
+
+function getPositionAuditSnapshot() {
+  const frames = positionAudit.frames.map((frame) => ({
+    frame: frame.frame,
+    sources: [...frame.sources],
+    sourceCount: frame.sources.length,
+    writeCount: frame.writeCount,
+    toyState: frame.toyState,
+    gameStage: frame.gameStage,
+    x: Number(frame.x.toFixed(6)),
+    y: Number(frame.y.toFixed(6)),
+    z: Number(frame.z.toFixed(6)),
+    relativeX: Number(frame.relativeX.toFixed(6)),
+    relativeY: Number(frame.relativeY.toFixed(6)),
+    relativeZ: Number(frame.relativeZ.toFixed(6)),
+    relativeDelta: Number(frame.relativeDelta.toFixed(6)),
+  }));
+
+  return {
+    active: positionAudit.active,
+    samples: positionAudit.samples,
+    minRelativeX: Number((Number.isFinite(positionAudit.minRelativeX) ? positionAudit.minRelativeX : 0).toFixed(6)),
+    maxRelativeX: Number((Number.isFinite(positionAudit.maxRelativeX) ? positionAudit.maxRelativeX : 0).toFixed(6)),
+    minRelativeY: Number((Number.isFinite(positionAudit.minRelativeY) ? positionAudit.minRelativeY : 0).toFixed(6)),
+    maxRelativeY: Number((Number.isFinite(positionAudit.maxRelativeY) ? positionAudit.maxRelativeY : 0).toFixed(6)),
+    maxRelativeDelta: Number(positionAudit.maxRelativeDelta.toFixed(6)),
+    stateSwitches: positionAudit.stateSwitches,
+    maxSourcesPerFrame: positionAudit.maxSourcesPerFrame,
+    invalidOwnerCount: positionAudit.invalidOwnerCount,
+    multiSourceFrames: frames.filter((frame) => frame.sourceCount > 1),
+    frames,
+  };
 }
 
 function resetPrizePhysics(prize, rotate = true) {
@@ -637,7 +769,7 @@ function resetPrizePhysics(prize, rotate = true) {
   prize.carryMaxRelativeDelta = 0;
   prize.carryRelativeWarningShown = false;
   clearPrizeGrip(prize);
-  syncPrizeVisual(prize);
+  syncPrizeVisual(prize, "reset");
 }
 
 function capturePrize(prize) {
@@ -727,8 +859,9 @@ function syncHeldPrize(prize, dt) {
   prize.body.torque.set(0, 0, 0);
   prize.body.aabbNeedsUpdate = true;
   prize.body.wakeUp();
+  recordPrizePositionWrite("claw-carry", prize);
   assertCarryOffsetStable(prize);
-  syncPrizeVisual(prize);
+  syncPrizeVisual(prize, "claw-carry");
 }
 
 function assertCarryOffsetStable(prize) {
@@ -1705,7 +1838,7 @@ function updatePrizes(now) {
     if (prize.collected || !prize.object.visible) return;
     if (prize.grabbed) return;
     if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
-    syncPrizeVisual(prize);
+    syncPrizeVisual(prize, "physics-sync");
   });
 }
 
@@ -1824,6 +1957,7 @@ function render(now) {
 }
 
 function tick(now) {
+  beginAuditFrame();
   const dt = Math.min(180, now - game.lastTime || 16);
   game.lastTime = now;
 
@@ -1840,7 +1974,7 @@ function tick(now) {
   updateEffects(dt);
   updateUi();
   render(now);
-  requestAnimationFrame(tick);
+  animationFrameId = requestAnimationFrame(tick);
 }
 
 function clamp(value, min, max) {
@@ -1889,6 +2023,9 @@ function easeInOut(t) {
 }
 
 window.__clawDebug = {
+  reset() {
+    resetGame();
+  },
   startDemo() {
     if (game.state !== STATES.IDLE && game.state !== STATES.CONTROLLING) return;
     if (!game.sessionActive || game.state === STATES.IDLE) resetGame();
@@ -1902,6 +2039,7 @@ window.__clawDebug = {
   advance(ms, step = 100) {
     const frames = Math.ceil(ms / step);
     for (let i = 0; i < frames; i += 1) {
+      beginAuditFrame();
       const dt = Math.min(180, step);
       if (game.inputMode === "camera") readCameraInput();
       if (game.demoActive) readDemoInput(dt);
@@ -1949,6 +2087,17 @@ window.__clawDebug = {
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
     };
+  },
+  startPositionAudit() {
+    resetPositionAudit();
+    positionAudit.active = true;
+  },
+  stopPositionAudit() {
+    positionAudit.active = false;
+    return getPositionAuditSnapshot();
+  },
+  getPositionAudit() {
+    return getPositionAuditSnapshot();
   },
   probeClawCollision() {
     resetRoundForReplay();
@@ -2022,17 +2171,39 @@ function handlePrimaryAction() {
     : "继续移动手掌，握拳并保持即可下爪。";
 }
 
-ui.primary.addEventListener("click", handlePrimaryAction);
-ui.resultAction.addEventListener("click", () => {
+function handleResultAction() {
   if (game.inputMode === "demo") window.__clawDebug.startDemo();
   game.resultFlashMs = 0;
-});
+}
+
+function handleDemoAction() {
+  window.__clawDebug.startDemo();
+}
+
+function cleanupPageRuntime() {
+  if (animationFrameId) {
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = 0;
+  }
+  stopCameraStream();
+  window.removeEventListener("resize", resizeRenderer);
+  window.removeEventListener("beforeunload", cleanupPageRuntime);
+  ui.primary.removeEventListener("click", handlePrimaryAction);
+  ui.resultAction.removeEventListener("click", handleResultAction);
+  ui.cameraRetry.removeEventListener("click", retryCamera);
+  ui.demo.removeEventListener("click", handleDemoAction);
+  ui.reset.removeEventListener("click", resetGame);
+}
+
+ui.primary.addEventListener("click", handlePrimaryAction);
+ui.resultAction.addEventListener("click", handleResultAction);
 ui.cameraRetry.addEventListener("click", retryCamera);
-ui.demo.addEventListener("click", () => window.__clawDebug.startDemo());
+ui.demo.addEventListener("click", handleDemoAction);
 ui.reset.addEventListener("click", resetGame);
+window.addEventListener("beforeunload", cleanupPageRuntime);
 
 resetGame();
 initCameraAndModel().catch((error) => {
   enableDemoMode(error.message || "摄像头不可用。");
 });
-requestAnimationFrame(tick);
+animationFrameId = requestAnimationFrame(tick);
