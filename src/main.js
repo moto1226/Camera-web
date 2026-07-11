@@ -168,6 +168,7 @@ const game = {
   resultFlashMs: 0,
   lastCarryMaxRelativeDelta: 0,
   lastReleaseStats: null,
+  lastPrewarmStats: null,
 };
 
 const claw = {
@@ -181,7 +182,6 @@ const claw = {
 };
 
 const PRIZE_BODY_OFFSET_Y = 0.42;
-const PRIZE_MASS = 0.58;
 const PRIZE_BODY_HALF = { x: 0.28, y: 0.36, z: 0.26 };
 const CLAW_CONTACT_SKIN = 0.025;
 const CLAW_SIDE_GRIP_Y = 0.13;
@@ -193,6 +193,38 @@ const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const CELEBRATION_SRC_DEFAULT = "/animations/celebration-confetti.json";
 const URL_PARAMS = new URLSearchParams(window.location.search);
 const DEBUG_SEED = URL_PARAMS.has("seed") ? normalizeSeed(URL_PARAMS.get("seed")) : null;
+const PHYSICS_TUNING = {
+  toy: {
+    massDensity: 3.4,
+    minMass: 1.5,
+    maxMass: 4,
+    linearDamping: 0.72,
+    angularDamping: 0.88,
+    sleepSpeedLimit: 0.035,
+    sleepTimeLimit: 0.35,
+    colliderScale: { x: 0.86, y: 0.88, z: 0.86 },
+    settleLinearThreshold: 0.08,
+    settleAngularThreshold: 0.14,
+  },
+  contact: {
+    prizePrizeFriction: 0.9,
+    prizeWallFriction: 1,
+    prizeClawFriction: 0.25,
+    restitution: 0,
+  },
+  claw: {
+    maxSensorSpeed: 8,
+    closeApproachSpeed: 0.0036,
+    gripCloseSpeed: 0.00155,
+    releaseHoldCloseSpeed: 0.0012,
+  },
+  simulation: {
+    fixedTimeStep: 1 / 60,
+    maxSubSteps: 4,
+    maxFrameDt: 1 / 30,
+    prewarmSteps: 90,
+  },
+};
 const physics = {
   world: null,
   prizeMaterial: null,
@@ -200,8 +232,8 @@ const physics = {
   clawMaterial: null,
   clawBody: null,
   clawBodies: [],
-  fixedTimeStep: 1 / 60,
-  maxSubSteps: 5,
+  fixedTimeStep: PHYSICS_TUNING.simulation.fixedTimeStep,
+  maxSubSteps: PHYSICS_TUNING.simulation.maxSubSteps,
 };
 
 const positionAudit = {
@@ -499,6 +531,7 @@ function buildPrizeRound({ resetProgress = true } = {}) {
         definition.grabOffset[1] * roundPrize.transform.scale,
         definition.grabOffset[2] * roundPrize.transform.scale,
       ),
+      mass: getPrizeMass(bodyHalf),
       bodyHalf,
       grabbed: false,
       collected: false,
@@ -521,6 +554,7 @@ function buildPrizeRound({ resetProgress = true } = {}) {
     sceneObjects.prizes.push(prize);
   });
 
+  prewarmPrizePhysics();
   loadPrizeModelsForRound(round.seed);
   preloadPrizeTemplates();
   ui.cameraMessage.textContent = "正在准备奖品，新一轮布局已生成。";
@@ -673,10 +707,20 @@ function applyRoundTransform(object, transform) {
 
 function getPrizeBodyHalf(definition, scale) {
   const size = definition.collider.size;
+  const colliderScale = PHYSICS_TUNING.toy.colliderScale;
   return new CANNON.Vec3(
-    Math.max(0.12, size[0] * scale * 0.5),
-    Math.max(0.12, size[1] * scale * 0.5),
-    Math.max(0.12, size[2] * scale * 0.5),
+    Math.max(0.12, size[0] * scale * colliderScale.x * 0.5),
+    Math.max(0.12, size[1] * scale * colliderScale.y * 0.5),
+    Math.max(0.12, size[2] * scale * colliderScale.z * 0.5),
+  );
+}
+
+function getPrizeMass(bodyHalf) {
+  const volume = Math.max(0.001, bodyHalf.x * 2 * bodyHalf.y * 2 * bodyHalf.z * 2);
+  return clamp(
+    volume * PHYSICS_TUNING.toy.massDensity,
+    PHYSICS_TUNING.toy.minMass,
+    PHYSICS_TUNING.toy.maxMass,
   );
 }
 
@@ -748,17 +792,27 @@ function initPhysics() {
   physics.world.addContactMaterial(new CANNON.ContactMaterial(
     physics.prizeMaterial,
     physics.prizeMaterial,
-    { friction: 0.82, restitution: 0.08, contactEquationStiffness: 7e6 },
+    {
+      friction: PHYSICS_TUNING.contact.prizePrizeFriction,
+      restitution: PHYSICS_TUNING.contact.restitution,
+      contactEquationStiffness: 7e6,
+    },
   ));
   physics.world.addContactMaterial(new CANNON.ContactMaterial(
     physics.prizeMaterial,
     physics.wallMaterial,
-    { friction: 0.7, restitution: 0.12 },
+    {
+      friction: PHYSICS_TUNING.contact.prizeWallFriction,
+      restitution: PHYSICS_TUNING.contact.restitution,
+    },
   ));
   physics.world.addContactMaterial(new CANNON.ContactMaterial(
     physics.prizeMaterial,
     physics.clawMaterial,
-    { friction: 0.45, restitution: 0.05 },
+    {
+      friction: PHYSICS_TUNING.contact.prizeClawFriction,
+      restitution: PHYSICS_TUNING.contact.restitution,
+    },
   ));
 
   addStaticBody([0, -0.08, 0.05], [3.45, 0.08, 2.2]);
@@ -796,8 +850,8 @@ function createClawCollider(radius, role) {
     material: physics.clawMaterial,
   });
   body.addShape(new CANNON.Sphere(radius));
-  body.collisionResponse = true;
-  body.userData = { role, radius };
+  body.collisionResponse = false;
+  body.userData = { role, radius, sensor: true, initialized: false };
   physics.world.addBody(body);
   physics.clawBodies.push(body);
   return body;
@@ -806,15 +860,16 @@ function createClawCollider(radius, role) {
 function createPrizeBody(prize) {
   if (!physics.world) return null;
   const bodyHalf = prize.bodyHalf || new CANNON.Vec3(PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.y, PRIZE_BODY_HALF.z);
+  const mass = prize.mass || getPrizeMass(bodyHalf);
 
   const body = new CANNON.Body({
-    mass: PRIZE_MASS,
+    mass,
     material: physics.prizeMaterial,
-    linearDamping: 0.62,
-    angularDamping: 0.82,
+    linearDamping: PHYSICS_TUNING.toy.linearDamping,
+    angularDamping: PHYSICS_TUNING.toy.angularDamping,
     allowSleep: true,
-    sleepSpeedLimit: 0.05,
-    sleepTimeLimit: 0.45,
+    sleepSpeedLimit: PHYSICS_TUNING.toy.sleepSpeedLimit,
+    sleepTimeLimit: PHYSICS_TUNING.toy.sleepTimeLimit,
   });
   body.addShape(new CANNON.Box(bodyHalf));
   body.position.set(prize.home.x, prize.home.y + bodyHalf.y, prize.home.z);
@@ -826,6 +881,7 @@ function createPrizeBody(prize) {
   physics.world.addBody(body);
 
   prize.body = body;
+  prize.mass = mass;
   prize.bodyOffsetY = bodyHalf.y;
   prize.bodyHalf = bodyHalf;
   prize.holdSpin = 0;
@@ -1011,7 +1067,7 @@ function getPositionAuditSnapshot({ includeFrames = false } = {}) {
 function resetPrizePhysics(prize, rotate = true) {
   if (!prize.body) return;
   prize.body.type = CANNON.Body.DYNAMIC;
-  prize.body.mass = PRIZE_MASS;
+  prize.body.mass = prize.mass || getPrizeMass(prize.bodyHalf || new CANNON.Vec3(PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.y, PRIZE_BODY_HALF.z));
   prize.body.collisionResponse = true;
   prize.body.updateMassProperties();
   prize.body.position.set(prize.home.x, prize.home.y + (prize.bodyOffsetY || PRIZE_BODY_OFFSET_Y), prize.home.z);
@@ -1292,12 +1348,15 @@ function syncClawCollider(dt) {
     const dy = target.y - body.position.y;
     const dz = target.z - body.position.z;
     const distance = Math.hypot(dx, dy, dz);
-    if (distance > 1.4) {
+    if (!body.userData.initialized || distance > 2.6) {
       body.position.set(target.x, target.y, target.z);
       body.previousPosition.copy(body.position);
       body.velocity.set(0, 0, 0);
+      body.userData.initialized = true;
     } else {
-      body.velocity.set(dx / seconds, dy / seconds, dz / seconds);
+      const speed = Math.min(PHYSICS_TUNING.claw.maxSensorSpeed, distance / seconds);
+      const scale = distance > 0.0001 ? speed / distance : 0;
+      body.velocity.set(dx * scale, dy * scale, dz * scale);
     }
     body.aabbNeedsUpdate = true;
   });
@@ -1364,12 +1423,8 @@ function constrainClawAgainstPrizes(dt) {
         const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
         lift = Math.max(lift, minTargetY - target.y);
         touching = true;
-        pushPrizeAwayFromClaw(prize, target, 0.2, dt);
       } else if (sideContact > 0) {
         touching = true;
-        if (game.state === STATES.GRABBING && claw.closed > 0.3) {
-          pushPrizeAwayFromClaw(prize, target, sideContact * 0.16, dt);
-        }
       }
     });
   });
@@ -1415,30 +1470,6 @@ function getSideContactStrength(target, prize, dx, dz) {
   return Math.max(0.18, 1 - Math.sqrt(normalized));
 }
 
-function pushPrizeAwayFromClaw(prize, target, strength, dt) {
-  const body = prize.body;
-  const dx = body.position.x - target.x;
-  const dz = body.position.z - target.z;
-  let length = Math.hypot(dx, dz);
-  let nx = dx;
-  let nz = dz;
-
-  if (length < 0.001) {
-    nx = body.position.x - claw.x || 0.001;
-    nz = body.position.z - claw.z || 0.001;
-    length = Math.hypot(nx, nz);
-  }
-
-  nx /= length;
-  nz /= length;
-  const impulse = strength * Math.min(4.2, 1.8 + dt * 0.012);
-  body.velocity.x += nx * impulse;
-  body.velocity.z += nz * impulse;
-  body.angularVelocity.x += nz * strength * 2.2;
-  body.angularVelocity.z -= nx * strength * 2.2;
-  body.wakeUp();
-}
-
 function measureClawPrizePenetration(prize) {
   if (!prize?.body) return 0;
   let maxPenetration = 0;
@@ -1464,9 +1495,83 @@ function wakePrizesNearClaw(targets) {
   });
 }
 
+function getPrizePhysicsSummary() {
+  let maxLinearSpeed = 0;
+  let maxAngularSpeed = 0;
+  let awakeCount = 0;
+
+  sceneObjects.prizes.forEach((prize) => {
+    if (!prize.body || prize.collected) return;
+    maxLinearSpeed = Math.max(maxLinearSpeed, prize.body.velocity.length());
+    maxAngularSpeed = Math.max(maxAngularSpeed, prize.body.angularVelocity.length());
+    if (prize.body.sleepState !== CANNON.Body.SLEEPING) awakeCount += 1;
+  });
+
+  return {
+    maxLinearSpeed,
+    maxAngularSpeed,
+    awakeCount,
+    overlapCount: measurePrizeOverlapCount(),
+  };
+}
+
+function measurePrizeOverlapCount() {
+  let count = 0;
+  for (let i = 0; i < sceneObjects.prizes.length; i += 1) {
+    const a = sceneObjects.prizes[i];
+    if (!a.body || a.collected) continue;
+    for (let j = i + 1; j < sceneObjects.prizes.length; j += 1) {
+      const b = sceneObjects.prizes[j];
+      if (!b.body || b.collected) continue;
+      const ax = a.bodyHalf?.x || PRIZE_BODY_HALF.x;
+      const az = a.bodyHalf?.z || PRIZE_BODY_HALF.z;
+      const bx = b.bodyHalf?.x || PRIZE_BODY_HALF.x;
+      const bz = b.bodyHalf?.z || PRIZE_BODY_HALF.z;
+      const overlapX = Math.abs(a.body.position.x - b.body.position.x) < (ax + bx) * 0.98;
+      const overlapZ = Math.abs(a.body.position.z - b.body.position.z) < (az + bz) * 0.98;
+      if (overlapX && overlapZ) count += 1;
+    }
+  }
+  return count;
+}
+
+function prewarmPrizePhysics() {
+  if (!physics.world || !sceneObjects.prizes.length) return;
+  const steps = PHYSICS_TUNING.simulation.prewarmSteps;
+  for (let i = 0; i < steps; i += 1) {
+    physics.world.step(physics.fixedTimeStep);
+  }
+
+  sceneObjects.prizes.forEach((prize) => {
+    if (!prize.body || prize.collected) return;
+    if (
+      prize.body.velocity.length() < PHYSICS_TUNING.toy.settleLinearThreshold
+      && prize.body.angularVelocity.length() < PHYSICS_TUNING.toy.settleAngularThreshold
+    ) {
+      prize.body.velocity.set(0, 0, 0);
+      prize.body.angularVelocity.set(0, 0, 0);
+      prize.body.sleep();
+    }
+    syncPrizeVisual(prize, "prewarm");
+  });
+
+  const summary = getPrizePhysicsSummary();
+  game.lastPrewarmStats = {
+    steps,
+    maxLinearSpeed: Number(summary.maxLinearSpeed.toFixed(4)),
+    maxAngularSpeed: Number(summary.maxAngularSpeed.toFixed(4)),
+    awakeCount: summary.awakeCount,
+    overlapCount: summary.overlapCount,
+  };
+}
+
 function stepPhysics(dt) {
   if (!physics.world) return;
-  physics.world.step(physics.fixedTimeStep, Math.min(dt / 1000, 0.05), physics.maxSubSteps);
+  physics.world.step(
+    physics.fixedTimeStep,
+    Math.min(dt / 1000, PHYSICS_TUNING.simulation.maxFrameDt),
+    physics.maxSubSteps,
+  );
 }
 
 function makeTextSprite(text, options = {}) {
@@ -2247,13 +2352,13 @@ function updateState(dt) {
     }
   } else if (game.state === STATES.DROPPING) {
     claw.targetY = WORLD.clawDropY;
-    claw.closed = approach(claw.closed, 0.2, dt * 0.006);
+    claw.closed = approach(claw.closed, 0.2, dt * PHYSICS_TUNING.claw.closeApproachSpeed);
     if (Math.abs(claw.y - WORLD.clawDropY) < 0.05 || game.clawContactMs > 180 || game.stateTime > 1500) {
       setState(STATES.GRABBING);
     }
   } else if (game.state === STATES.GRABBING) {
     claw.targetY = WORLD.clawDropY;
-    claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * 0.0028);
+    claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * PHYSICS_TUNING.claw.gripCloseSpeed);
     if (!game.grabbedPrize && game.stateTime > 720 && Math.abs(claw.closed - CLAW_GRIP_CLOSED) < 0.03) {
       game.grabbedPrize = pickPrize();
       if (game.grabbedPrize) capturePrize(game.grabbedPrize);
@@ -2285,7 +2390,7 @@ function updateState(dt) {
     }
 
     if (!game.releaseStarted) {
-      claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * 0.002);
+      claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * PHYSICS_TUNING.claw.releaseHoldCloseSpeed);
       const overOutlet = Math.abs(claw.x - OUTLET_BOUNDS.centerX) < 0.035
         && Math.abs(claw.z - OUTLET_BOUNDS.centerZ) < 0.035;
       const lowered = Math.abs(claw.y - OUTLET_BOUNDS.releaseClawY) < 0.045;
@@ -2698,7 +2803,15 @@ window.__clawDebug = {
         definitionId: prize.definitionId,
         state: prize.state,
         positionOwner: prize.positionOwner,
+        mass: Number((prize.mass || 0).toFixed(3)),
         grabRadius: Number((prize.grabRadius || 0).toFixed(3)),
+        bodyHalf: prize.bodyHalf
+          ? {
+              x: Number(prize.bodyHalf.x.toFixed(3)),
+              y: Number(prize.bodyHalf.y.toFixed(3)),
+              z: Number(prize.bodyHalf.z.toFixed(3)),
+            }
+          : null,
         position: prize.body
           ? {
               x: Number(prize.body.position.x.toFixed(3)),
@@ -2706,6 +2819,9 @@ window.__clawDebug = {
               z: Number(prize.body.position.z.toFixed(3)),
             }
           : null,
+        speed: prize.body ? Number(prize.body.velocity.length().toFixed(4)) : 0,
+        angularSpeed: prize.body ? Number(prize.body.angularVelocity.length().toFixed(4)) : 0,
+        sleepState: prize.body?.sleepState ?? null,
       })),
       celebrationCount: game.celebrationCount,
       hasCelebratedCollection: game.hasCelebratedCollection,
@@ -2735,6 +2851,27 @@ window.__clawDebug = {
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
       lastReleaseStats: game.lastReleaseStats,
+      lastPrewarmStats: game.lastPrewarmStats,
+      prizePhysics: (() => {
+        const summary = getPrizePhysicsSummary();
+        return {
+          maxLinearSpeed: Number(summary.maxLinearSpeed.toFixed(4)),
+          maxAngularSpeed: Number(summary.maxAngularSpeed.toFixed(4)),
+          awakeCount: summary.awakeCount,
+          overlapCount: summary.overlapCount,
+        };
+      })(),
+      physicsTuning: {
+        toy: {
+          minMass: PHYSICS_TUNING.toy.minMass,
+          maxMass: PHYSICS_TUNING.toy.maxMass,
+          linearDamping: PHYSICS_TUNING.toy.linearDamping,
+          angularDamping: PHYSICS_TUNING.toy.angularDamping,
+          colliderScale: { ...PHYSICS_TUNING.toy.colliderScale },
+        },
+        contact: { ...PHYSICS_TUNING.contact },
+        simulation: { ...PHYSICS_TUNING.simulation },
+      },
       outletBounds: { ...OUTLET_BOUNDS },
     };
   },

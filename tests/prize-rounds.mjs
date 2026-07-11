@@ -29,7 +29,7 @@ for (const seed of seeds) {
 
   round.prizes.forEach((prize, index) => {
     const { x, z } = prize.transform.position;
-    const radius = prize.placementRadius;
+    const radius = prize.boundsRadius || prize.placementRadius;
     if (
       x < PRIZE_SPAWN_BOUNDS.minX + radius
       || x > PRIZE_SPAWN_BOUNDS.maxX - radius
@@ -53,6 +53,19 @@ for (const seed of seeds) {
         a.transform.position.z - b.transform.position.z,
       );
       if (distance < 0.001) failures.push(`seed ${seed}: overlapping centers ${i}/${j}`);
+      const minDistance = ((a.collisionRadius || a.placementRadius) + (b.collisionRadius || b.placementRadius)) * 0.9;
+      if (distance < minDistance) {
+        failures.push(`seed ${seed}: collider overlap ${i}/${j} distance=${distance.toFixed(3)} min=${minDistance.toFixed(3)}`);
+      }
+      if (a.collisionHalf && b.collisionHalf) {
+        const overlapX = Math.abs(a.transform.position.x - b.transform.position.x)
+          < (a.collisionHalf.x + b.collisionHalf.x) * 0.96;
+        const overlapZ = Math.abs(a.transform.position.z - b.transform.position.z)
+          < (a.collisionHalf.z + b.collisionHalf.z) * 0.96;
+        if (overlapX && overlapZ) {
+          failures.push(`seed ${seed}: aabb overlap ${i}/${j}`);
+        }
+      }
     }
   }
 

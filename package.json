@@ -10,7 +10,8 @@
     "test:flow": "node tests/flow-smoke.mjs",
     "test:carry": "node tests/carry-audit.mjs",
     "test:celebration": "node tests/celebration-flow.mjs",
-    "test:prizes": "node tests/prize-rounds.mjs"
+    "test:prizes": "node tests/prize-rounds.mjs",
+    "test:physics": "node tests/physics-stability.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",

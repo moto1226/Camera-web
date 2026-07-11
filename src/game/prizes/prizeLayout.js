@@ -22,6 +22,7 @@ export const PRIZE_SPAWN_BOUNDS = {
 };
 
 const PRIZE_SCALE_BOOST = 1.1;
+const COLLIDER_FOOTPRINT_SCALE = { x: 0.86, z: 0.86 };
 
 export function createPrizeRound(options = {}) {
   const config = { ...DEFAULT_ROUND_OPTIONS, ...options };
@@ -52,6 +53,9 @@ export function createPrizeRound(options = {}) {
       transform: item.transform,
       colorVariant: item.colorVariant,
       placementRadius: item.placementRadius,
+      collisionRadius: item.collisionRadius,
+      collisionHalf: item.collisionHalf,
+      boundsRadius: item.boundsRadius,
     })),
   };
 }
@@ -122,53 +126,51 @@ function createLayout(definitions, rng, bounds) {
   const sorted = [...definitions].sort((a, b) => getPlacementRadius(b) - getPlacementRadius(a));
   const grid = createGrid(definitions.length, bounds, rng);
   const placed = [];
-  const minGapMultiplier = 0.82;
+  const minGapMultiplier = 1.3;
 
   sorted.forEach((definition, index) => {
     const placementRadius = getPlacementRadius(definition);
+    const scale = randomRange(rng, definition.scaleRange[0], definition.scaleRange[1]) * PRIZE_SCALE_BOOST;
+    const collisionHalf = getCollisionFootprint(definition, scale);
+    const collisionRadius = Math.max(collisionHalf.x, collisionHalf.z);
+    const boundsRadius = Math.max(collisionRadius + 0.08, placementRadius * 0.62);
     const colorVariant = pickColorVariant(definition, rng);
     let chosen = null;
     let gapMultiplier = minGapMultiplier;
 
-    for (let attempt = 0; attempt < 90 && !chosen; attempt += 1) {
-      if (attempt > 52) gapMultiplier = 0.72;
+    for (let attempt = 0; attempt < 120 && !chosen; attempt += 1) {
+      if (attempt > 72) gapMultiplier = 1.18;
       const base = grid[(index + attempt) % grid.length];
       const jitter = Math.max(0.04, 0.18 - attempt * 0.0015);
-      const x = clamp(base.x + randomRange(rng, -jitter, jitter), bounds.minX + placementRadius, bounds.maxX - placementRadius);
-      const z = clamp(base.z + randomRange(rng, -jitter, jitter), bounds.minZ + placementRadius, bounds.maxZ - placementRadius);
+      const x = clamp(base.x + randomRange(rng, -jitter, jitter), bounds.minX + boundsRadius, bounds.maxX - boundsRadius);
+      const z = clamp(base.z + randomRange(rng, -jitter, jitter), bounds.minZ + boundsRadius, bounds.maxZ - boundsRadius);
       if (isExcluded(x, z, bounds)) continue;
-      const overlaps = placed.some((item) => (
-        Math.hypot(item.transform.position.x - x, item.transform.position.z - z)
-          < (item.placementRadius + placementRadius) * gapMultiplier
-      ));
-      if (!overlaps) chosen = { x, y: base.y ?? bounds.baseY, z };
+      if (!overlapsPlaced(x, z, collisionHalf, placed, gapMultiplier)) {
+        chosen = { x, y: base.y ?? bounds.baseY, z };
+      }
     }
 
     if (!chosen) {
       for (const fallback of grid) {
-        const x = clamp(fallback.x + randomRange(rng, -0.06, 0.06), bounds.minX + placementRadius, bounds.maxX - placementRadius);
-        const z = clamp(fallback.z + randomRange(rng, -0.06, 0.06), bounds.minZ + placementRadius, bounds.maxZ - placementRadius);
+        const x = clamp(fallback.x + randomRange(rng, -0.06, 0.06), bounds.minX + boundsRadius, bounds.maxX - boundsRadius);
+        const z = clamp(fallback.z + randomRange(rng, -0.06, 0.06), bounds.minZ + boundsRadius, bounds.maxZ - boundsRadius);
         if (isExcluded(x, z, bounds)) continue;
-        const duplicate = placed.some((item) => (
-          Math.hypot(item.transform.position.x - x, item.transform.position.z - z) < 0.02
-        ));
-        if (!duplicate) {
+        if (!overlapsPlaced(x, z, collisionHalf, placed, 1.16)) {
           chosen = { x, y: fallback.y ?? bounds.baseY, z };
           break;
         }
       }
-      chosen ||= {
-        x: randomRange(rng, bounds.minX + placementRadius, bounds.maxX - placementRadius),
-        y: bounds.baseY,
-        z: randomRange(rng, bounds.minZ + placementRadius, bounds.maxZ - placementRadius),
-      };
+      chosen ||= findFallbackPosition(bounds, collisionHalf, boundsRadius, placed, rng);
+      if (!chosen) return;
     }
 
-    const scale = randomRange(rng, definition.scaleRange[0], definition.scaleRange[1]) * PRIZE_SCALE_BOOST;
     placed.push({
       definition,
       colorVariant,
       placementRadius,
+      collisionRadius,
+      collisionHalf,
+      boundsRadius,
       transform: {
         position: { x: chosen.x, y: chosen.y ?? bounds.baseY, z: chosen.z },
         rotation: {
@@ -184,6 +186,55 @@ function createLayout(definitions, rng, bounds) {
   return shuffleWithRng(placed, rng);
 }
 
+function overlapsPlaced(x, z, collisionHalf, placed, gapMultiplier) {
+  return placed.some((item) => (
+    Math.abs(item.transform.position.x - x) < (item.collisionHalf.x + collisionHalf.x) * gapMultiplier
+    && Math.abs(item.transform.position.z - z) < (item.collisionHalf.z + collisionHalf.z) * gapMultiplier
+  ));
+}
+
+function findFallbackPosition(bounds, collisionHalf, placementRadius, placed, rng) {
+  const candidates = [];
+  const xSteps = 15;
+  const zSteps = 9;
+  const minX = bounds.minX + placementRadius;
+  const maxX = bounds.maxX - placementRadius;
+  const minZ = bounds.minZ + placementRadius;
+  const maxZ = bounds.maxZ - placementRadius;
+
+  for (let xi = 0; xi < xSteps; xi += 1) {
+    for (let zi = 0; zi < zSteps; zi += 1) {
+      const x = clamp(
+        minX + ((maxX - minX) * xi) / Math.max(1, xSteps - 1) + randomRange(rng, -0.025, 0.025),
+        minX,
+        maxX,
+      );
+      const z = clamp(
+        minZ + ((maxZ - minZ) * zi) / Math.max(1, zSteps - 1) + randomRange(rng, -0.025, 0.025),
+        minZ,
+        maxZ,
+      );
+      if (isExcluded(x, z, bounds)) continue;
+      const score = getPlacementClearanceScore(x, z, collisionHalf, placed);
+      candidates.push({ x, y: bounds.baseY, z, score });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.find((candidate) => !overlapsPlaced(candidate.x, candidate.z, collisionHalf, placed, 1.08))
+    || candidates.find((candidate) => !overlapsPlaced(candidate.x, candidate.z, collisionHalf, placed, 1))
+    || null;
+}
+
+function getPlacementClearanceScore(x, z, collisionHalf, placed) {
+  if (!placed.length) return Infinity;
+  return placed.reduce((minScore, item) => {
+    const clearanceX = Math.abs(item.transform.position.x - x) - (item.collisionHalf.x + collisionHalf.x);
+    const clearanceZ = Math.abs(item.transform.position.z - z) - (item.collisionHalf.z + collisionHalf.z);
+    return Math.min(minScore, Math.max(clearanceX, clearanceZ));
+  }, Infinity);
+}
+
 function weightedPick(definitions, rng) {
   if (!definitions.length) return null;
   const total = definitions.reduce((sum, definition) => sum + Math.max(0, definition.selectionWeight || 1), 0);
@@ -197,7 +248,7 @@ function weightedPick(definitions, rng) {
 }
 
 function createGrid(count, bounds, rng) {
-  const columns = Math.max(5, Math.ceil(count / 2.4));
+  const columns = Math.max(7, Math.ceil(count / 1.8));
   const points = [];
   const layers = [
     { z: -1.05, y: 0.18, inset: 0.18 },
@@ -223,6 +274,14 @@ function createGrid(count, bounds, rng) {
 
 function getPlacementRadius(definition) {
   return Math.max(definition.grabRadius, Math.max(...definition.collider.size) * 0.5) * PRIZE_SCALE_BOOST;
+}
+
+function getCollisionFootprint(definition, scale) {
+  const [x, , z] = definition.collider.size;
+  return {
+    x: x * scale * COLLIDER_FOOTPRINT_SCALE.x * 0.5,
+    z: z * scale * COLLIDER_FOOTPRINT_SCALE.z * 0.5,
+  };
 }
 
 function pickColorVariant(definition, rng) {
