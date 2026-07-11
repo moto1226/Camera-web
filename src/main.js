@@ -218,8 +218,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f16);
 scene.fog = new THREE.Fog(0x0b0f16, 8, 17);
 
-const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 60);
-camera.position.set(0, 4.65, 8.7);
+const camera = new THREE.PerspectiveCamera(37, 1, 0.1, 60);
+camera.position.set(0, 3.35, 8.9);
 
 const loader = new GLTFLoader();
 const sceneObjects = {
@@ -241,12 +241,12 @@ const mats = {
   shellDark: new THREE.MeshStandardMaterial({ color: 0x32170e, roughness: 0.55, metalness: 0.1 }),
   trim: new THREE.MeshStandardMaterial({ color: 0xffd776, roughness: 0.35, metalness: 0.18 }),
   glass: new THREE.MeshPhysicalMaterial({
-    color: 0x8bd8ff,
+    color: 0xb9e8ff,
     transparent: true,
-    opacity: 0.22,
-    roughness: 0.04,
+    opacity: 0.09,
+    roughness: 0.08,
     metalness: 0,
-    transmission: 0.16,
+    transmission: 0.28,
     depthWrite: false,
   }),
   floor: new THREE.MeshStandardMaterial({ color: 0x111820, roughness: 0.78, metalness: 0.05 }),
@@ -254,6 +254,9 @@ const mats = {
   clawBody: new THREE.MeshStandardMaterial({ color: 0x3b2416, roughness: 0.45, metalness: 0.18 }),
   clawMetal: new THREE.MeshStandardMaterial({ color: 0xe9edf0, roughness: 0.24, metalness: 0.42 }),
   mint: new THREE.MeshStandardMaterial({ color: 0x55efc4, roughness: 0.35, metalness: 0.08, emissive: 0x0b5a46 }),
+  outletRim: new THREE.MeshStandardMaterial({ color: 0xe7c781, roughness: 0.44, metalness: 0.16 }),
+  outletInside: new THREE.MeshStandardMaterial({ color: 0x0b0a08, roughness: 0.86, metalness: 0.02 }),
+  outletLip: new THREE.MeshStandardMaterial({ color: 0x1f1610, roughness: 0.68, metalness: 0.06 }),
   red: new THREE.MeshStandardMaterial({ color: 0xff5f7e, roughness: 0.5, metalness: 0.05, emissive: 0x45111c }),
   shadow: new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.34 }),
 };
@@ -315,9 +318,9 @@ function buildMachine() {
   addBox(m, [0.16, 0.16, 3.8], [-3.08, WORLD.railY - 0.04, 0], mats.rail, true);
   addBox(m, [0.16, 0.16, 3.8], [3.08, WORLD.railY - 0.04, 0], mats.rail, true);
 
-  addGlassPanel([0, 2.0, 2.0], [6.85, 3.45, 0.04]);
-  addGlassPanel([-3.45, 2.0, 0], [0.04, 3.45, 3.95]);
-  addGlassPanel([3.45, 2.0, 0], [0.04, 3.45, 3.95]);
+  addGlassPanel([0, 2.0, 2.0], [6.85, 3.35, 0.03]);
+  addGlassPanel([-3.45, 2.0, 0], [0.025, 3.25, 3.84]);
+  addGlassPanel([3.45, 2.0, 0], [0.025, 3.25, 3.84]);
 
   addBox(m, [5.0, 0.38, 0.22], [0, 4.5, 2.12], mats.shellDark, false);
   sceneObjects.titleSprite = makeTextSprite("LUCKY HAND CLAW", {
@@ -342,23 +345,17 @@ function buildMachine() {
 
   const exit = new THREE.Group();
   exit.position.copy(WORLD.exit);
-  addBox(exit, [1.18, 0.18, 0.74], [0, 0.03, 0], mats.shellDark, true);
-  addBox(exit, [0.88, 0.08, 0.48], [0, 0.14, 0.02], mats.mint, false);
-  sceneObjects.exitGlow = new THREE.PointLight(0x55efc4, 1.2, 2.4);
-  sceneObjects.exitGlow.position.set(0, 0.38, 0.08);
+  addBox(exit, [1.46, 0.18, 0.82], [0, 0.02, 0], mats.outletLip, true);
+  addBox(exit, [1.24, 0.26, 0.58], [0, 0.12, 0.02], mats.outletInside, true);
+  addBox(exit, [1.56, 0.12, 0.12], [0, 0.31, 0.34], mats.outletRim, true);
+  addBox(exit, [1.56, 0.12, 0.12], [0, 0.31, -0.34], mats.outletRim, true);
+  addBox(exit, [0.12, 0.32, 0.72], [-0.78, 0.18, 0], mats.outletRim, true);
+  addBox(exit, [0.12, 0.32, 0.72], [0.78, 0.18, 0], mats.outletRim, true);
+  addBox(exit, [1.02, 0.04, 0.42], [0, 0.27, 0.03], mats.shellDark, false);
+  sceneObjects.exitGlow = new THREE.PointLight(0xffd58a, 0.52, 1.8);
+  sceneObjects.exitGlow.position.set(0, 0.34, 0.18);
   exit.add(sceneObjects.exitGlow);
   m.add(exit);
-
-  const chuteLabel = makeTextSprite("PRIZE", {
-    fontSize: 64,
-    color: "#55efc4",
-    bg: "rgba(0,0,0,0)",
-    width: 360,
-    height: 120,
-  });
-  chuteLabel.position.set(WORLD.exit.x, 0.55, WORLD.exit.z + 0.3);
-  chuteLabel.scale.set(0.82, 0.26, 1);
-  m.add(chuteLabel);
 
   const groundShadow = new THREE.Mesh(new THREE.CircleGeometry(4.6, 48), mats.shadow);
   groundShadow.rotation.x = -Math.PI / 2;
@@ -1389,35 +1386,8 @@ function setMessage(text, subtext) {
     sceneObjects.machine.remove(sceneObjects.messageSprite);
     sceneObjects.messageSprite.material.map.dispose();
     sceneObjects.messageSprite.material.dispose();
+    sceneObjects.messageSprite = null;
   }
-
-  const cnv = document.createElement("canvas");
-  cnv.width = 920;
-  cnv.height = 300;
-  const c = cnv.getContext("2d");
-  c.fillStyle = "rgba(5, 9, 12, 0.78)";
-  roundedCanvasRect(c, 0, 0, cnv.width, cnv.height, 34);
-  c.fill();
-  c.strokeStyle = "rgba(255, 247, 230, 0.18)";
-  c.lineWidth = 3;
-  c.stroke();
-  c.textAlign = "center";
-  c.textBaseline = "middle";
-  c.fillStyle = "#fff7e6";
-  c.font = "900 88px Trebuchet MS, Microsoft YaHei, sans-serif";
-  c.fillText(text, cnv.width / 2, 118);
-  c.fillStyle = "#ffc857";
-  c.font = "700 42px Trebuchet MS, Microsoft YaHei, sans-serif";
-  c.fillText(subtext, cnv.width / 2, 210);
-
-  const texture = new THREE.CanvasTexture(cnv);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
-  sprite.scale.set(4.2, 1.36, 1);
-  sprite.position.set(0, 2.22, 2.16);
-  sprite.renderOrder = 20;
-  sceneObjects.messageSprite = sprite;
-  sceneObjects.machine.add(sprite);
 }
 
 function roundedCanvasRect(c, x, y, w, h, r) {
@@ -2416,8 +2386,8 @@ function resizeRenderer() {
 }
 
 function render(now) {
-  camera.lookAt(0, 1.85, 0.08);
-  if (sceneObjects.exitGlow) sceneObjects.exitGlow.intensity = 1.1 + Math.sin(now * 0.006) * 0.35;
+  camera.lookAt(0, 1.55, 0.18);
+  if (sceneObjects.exitGlow) sceneObjects.exitGlow.intensity = 0.46 + Math.sin(now * 0.004) * 0.08;
   renderer.render(scene, camera);
 }
 

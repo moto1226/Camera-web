@@ -25,12 +25,12 @@
 html,
 body {
   width: 100%;
-  min-height: 100%;
+  height: 100%;
   margin: 0;
   background:
-    radial-gradient(circle at 12% 18%, rgba(91, 246, 207, 0.12), transparent 24rem),
-    radial-gradient(circle at 82% 12%, rgba(127, 220, 255, 0.11), transparent 28rem),
-    linear-gradient(145deg, #08101a 0%, #0b0d16 48%, #05070b 100%);
+    radial-gradient(circle at 16% 18%, rgba(91, 246, 207, 0.09), transparent 24rem),
+    radial-gradient(circle at 82% 14%, rgba(255, 214, 118, 0.08), transparent 28rem),
+    linear-gradient(145deg, #05080d 0%, #080b11 54%, #030508 100%);
   color: var(--text);
   font-family:
     "Microsoft YaHei UI",
@@ -38,7 +38,8 @@ body {
     "PingFang SC",
     "Segoe UI",
     sans-serif;
-  overflow-x: hidden;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body::before {
@@ -50,7 +51,8 @@ body::before {
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
   background-size: 48px 48px;
-  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent 78%);
+  opacity: 0.42;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.72), transparent 82%);
 }
 
 button,
@@ -66,34 +68,41 @@ summary {
 }
 
 .shell {
-  width: min(1360px, 100vw);
-  min-height: 100vh;
-  margin: 0 auto;
-  padding: clamp(10px, 2vw, 24px);
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  padding: clamp(8px, 1.1vw, 16px);
+  overflow: hidden;
 }
 
 .game-shell {
-  min-height: calc(100vh - clamp(20px, 4vw, 48px));
-  display: grid;
-  grid-template-rows: auto minmax(420px, 1fr) auto;
-  gap: 12px;
-  padding: clamp(10px, 1.7vw, 18px);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(14, 23, 35, 0.94), rgba(7, 11, 18, 0.98)),
-    var(--bg-soft);
-  box-shadow: 0 24px 90px var(--shadow);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(244, 247, 248, 0.08);
+  border-radius: 12px;
+  background: #05080d;
+  box-shadow:
+    0 24px 90px var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .top-bar {
-  min-height: 62px;
+  position: absolute;
+  z-index: 6;
+  left: clamp(14px, 2vw, 28px);
+  top: clamp(12px, 1.8vw, 24px);
+  min-height: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
-  padding: 4px 4px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0;
+  border: 0;
+  pointer-events: none;
 }
 
 .eyebrow {
@@ -108,9 +117,10 @@ summary {
 h1 {
   margin: 0;
   color: var(--text);
-  font-size: clamp(28px, 4vw, 46px);
+  font-size: clamp(26px, 3.6vw, 48px);
   line-height: 0.95;
   letter-spacing: 0.03em;
+  text-shadow: 0 4px 26px rgba(0, 0, 0, 0.46);
 }
 
 .camera-pill {
@@ -122,7 +132,8 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(4, 8, 12, 0.54);
+  backdrop-filter: blur(12px);
   font-size: 13px;
   white-space: nowrap;
 }
@@ -148,12 +159,15 @@ h1 {
 
 .machine-panel {
   position: relative;
-  min-height: 64vh;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  border: 1px solid rgba(91, 246, 207, 0.24);
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: 12px;
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.04), transparent 34%),
+    radial-gradient(circle at 50% 12%, rgba(255, 221, 142, 0.08), transparent 28rem),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.035), transparent 34%),
     #080c12;
 }
 
@@ -161,7 +175,7 @@ h1 {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 64vh;
+  min-height: 0;
 }
 
 .glass-reflection {
@@ -169,9 +183,9 @@ h1 {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(110deg, transparent 8%, rgba(255, 255, 255, 0.09) 9%, transparent 20%),
-    linear-gradient(74deg, transparent 58%, rgba(127, 220, 255, 0.07) 60%, transparent 70%);
-  opacity: 0.55;
+    linear-gradient(108deg, transparent 12%, rgba(255, 255, 255, 0.08) 13%, transparent 23%),
+    linear-gradient(74deg, transparent 66%, rgba(255, 255, 255, 0.045) 68%, transparent 78%);
+  opacity: 0.36;
 }
 
 .scanlines {
@@ -186,7 +200,7 @@ h1 {
     transparent 6px
   );
   mix-blend-mode: overlay;
-  opacity: 0.18;
+  opacity: 0.09;
 }
 
 .target-reticle {
@@ -232,14 +246,14 @@ h1 {
 
 .camera-card {
   position: absolute;
-  right: clamp(10px, 1.7vw, 20px);
-  top: clamp(10px, 1.7vw, 20px);
-  width: clamp(220px, 20vw, 280px);
+  right: clamp(14px, 2vw, 28px);
+  top: clamp(12px, 1.8vw, 24px);
+  width: clamp(180px, 16vw, 238px);
   aspect-ratio: 4 / 3;
   overflow: hidden;
   border: 1px solid rgba(147, 165, 178, 0.4);
   border-radius: 8px;
-  background: #05080c;
+  background: rgba(5, 8, 12, 0.92);
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.44);
   transition:
     border-color 160ms ease,
@@ -348,24 +362,29 @@ h1 {
 
 .gesture-hud {
   position: absolute;
-  left: clamp(10px, 1.7vw, 20px);
-  top: clamp(10px, 1.7vw, 20px);
-  max-width: min(380px, calc(100% - 340px));
-  min-height: 76px;
+  left: 50%;
+  top: auto;
+  bottom: clamp(82px, 10vh, 118px);
+  z-index: 5;
+  width: min(470px, calc(100% - 440px));
+  max-width: min(470px, calc(100% - 440px));
+  min-height: 68px;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 54px;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(7, 11, 18, 0.7);
-  backdrop-filter: blur(8px);
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(244, 247, 248, 0.12);
+  border-radius: 999px;
+  background: rgba(4, 8, 12, 0.62);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.32);
+  transform: translateX(-50%);
 }
 
 .gesture-icon {
-  width: 50px;
-  height: 50px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   border: 1px solid rgba(147, 165, 178, 0.28);
@@ -392,7 +411,7 @@ h1 {
 
 .gesture-hud strong {
   display: block;
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.2;
 }
 
@@ -406,8 +425,8 @@ h1 {
 
 .hold-ring {
   --progress: 0deg;
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   background:
     radial-gradient(circle at center, rgba(7, 11, 18, 0.96) 58%, transparent 60%),
@@ -469,22 +488,32 @@ h1 {
 }
 
 .control-panel {
-  display: grid;
-  grid-template-columns: minmax(260px, 1.15fr) minmax(360px, 1fr) minmax(260px, 0.9fr);
-  gap: 12px;
-  align-items: stretch;
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .instruction-card,
 .score-board,
 .debug-details {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(6, 10, 15, 0.48);
+  border: 1px solid rgba(244, 247, 248, 0.12);
+  border-radius: 10px;
+  background: rgba(4, 8, 12, 0.58);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28);
+  pointer-events: auto;
 }
 
 .instruction-card {
-  padding: 14px;
+  position: absolute;
+  left: 50%;
+  bottom: clamp(158px, 18vh, 190px);
+  width: min(540px, calc(100vw - 520px));
+  min-width: 360px;
+  padding: 14px 18px;
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 .label {
@@ -501,41 +530,47 @@ h1 {
 }
 
 .instruction-card p {
-  margin: 10px 0 0;
+  margin: 7px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
 }
 
 .progress-steps {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(22px, 3vh, 34px);
+  width: min(520px, calc(100vw - 520px));
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  grid-column: 1 / 3;
-  order: 3;
   gap: 0;
   margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: rgba(6, 10, 15, 0.42);
+  padding: 9px 12px;
+  border: 1px solid rgba(244, 247, 248, 0.1);
+  border-radius: 999px;
+  background: rgba(4, 8, 12, 0.54);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.24);
   list-style: none;
+  pointer-events: auto;
+  transform: translateX(-50%);
 }
 
 .progress-steps li {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 7px;
+  gap: 5px;
   color: var(--subtle);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .progress-steps li::before {
   content: "";
   z-index: 1;
-  width: 18px;
-  height: 18px;
+  width: 12px;
+  height: 12px;
   border: 1px solid rgba(147, 165, 178, 0.38);
   border-radius: 50%;
   background: #0a1018;
@@ -545,7 +580,7 @@ h1 {
   content: "";
   position: absolute;
   left: calc(50% + 14px);
-  top: 9px;
+  top: 6px;
   width: calc(100% - 28px);
   height: 1px;
   background: rgba(147, 165, 178, 0.22);
@@ -570,7 +605,11 @@ h1 {
 }
 
 .score-board {
-  padding: 13px;
+  position: absolute;
+  left: clamp(14px, 2vw, 28px);
+  bottom: clamp(18px, 2.5vh, 30px);
+  width: min(300px, 25vw);
+  padding: 11px 12px;
 }
 
 .score-head {
@@ -583,20 +622,20 @@ h1 {
 .score-head strong {
   display: block;
   color: var(--text);
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .score-stats {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
 }
 
 .score-log {
-  display: grid;
+  display: none;
   gap: 6px;
   max-height: 94px;
   margin: 12px 0 0;
@@ -716,9 +755,14 @@ h1 {
 }
 
 .actions {
+  position: absolute;
+  right: clamp(14px, 2vw, 28px);
+  bottom: clamp(18px, 2.5vh, 30px);
+  width: min(300px, 25vw);
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(92px, 0.42fr);
+  grid-template-columns: minmax(160px, 1fr) minmax(86px, 0.46fr);
   gap: 10px;
+  pointer-events: auto;
 }
 
 button {
@@ -773,19 +817,28 @@ summary:focus-visible {
 }
 
 .debug-details {
-  grid-column: 3;
-  order: 4;
-  min-height: 44px;
-  padding: 0 12px;
+  position: absolute;
+  left: clamp(14px, 2vw, 28px);
+  top: clamp(102px, 14vh, 140px);
+  width: 132px;
+  min-height: 34px;
+  padding: 0 10px;
+  opacity: 0.26;
+  transition: opacity 160ms ease;
+}
+
+.debug-details[open],
+.debug-details:hover {
+  opacity: 1;
 }
 
 .debug-details summary {
-  min-height: 44px;
+  min-height: 34px;
   display: flex;
   align-items: center;
   color: var(--muted);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .status-grid {
