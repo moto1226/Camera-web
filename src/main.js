@@ -98,6 +98,30 @@ const WORLD = {
   exit: new THREE.Vector3(-2.9, 0.1, 2.02),
 };
 
+const OUTLET_BOUNDS = {
+  centerX: WORLD.exit.x,
+  centerZ: WORLD.exit.z,
+  minX: WORLD.exit.x - 0.58,
+  maxX: WORLD.exit.x + 0.58,
+  minZ: WORLD.exit.z - 0.32,
+  maxZ: WORLD.exit.z + 0.36,
+  floorY: 0.18,
+  releaseClawY: 1.68,
+  releasePauseMs: 130,
+};
+
+const OUTLET_DROP = {
+  gravity: 7.2,
+  initialVelocityY: -0.08,
+  lateralSpring: 13,
+  lateralDamping: 0.72,
+  nearFloorDamping: 0.42,
+  restitution: 0.08,
+  settleSpeed: 0.055,
+  settleMs: 90,
+  maxDt: 1 / 30,
+};
+
 const input = {
   rawX: 0.5,
   rawY: 0.5,
@@ -120,6 +144,7 @@ const game = {
   result: "未开始",
   grabbedPrize: null,
   releaseStarted: false,
+  releaseReadyMs: 0,
   demoActive: false,
   demoTime: 0,
   demoTarget: null,
@@ -142,6 +167,7 @@ const game = {
   lastHandSeenAt: 0,
   resultFlashMs: 0,
   lastCarryMaxRelativeDelta: 0,
+  lastReleaseStats: null,
 };
 
 const claw = {
@@ -314,6 +340,8 @@ function buildMachine() {
   addBox(m, [0.24, 3.7, 0.32], [3.62, 1.82, 2.08], mats.shell, true);
 
   addBox(m, [6.8, 0.08, 4.1], [0, WORLD.floorY, 0], mats.floor, true);
+  addBox(m, [5.5, 0.16, 0.76], [0, 0.06, -1.05], mats.floor, true);
+  addBox(m, [5.3, 0.07, 0.68], [0, 0.02, -0.24], mats.floor, true);
   addBox(m, [6.2, 0.12, 0.12], [0, WORLD.railY, 0.05], mats.rail, true);
   addBox(m, [0.16, 0.16, 3.8], [-3.08, WORLD.railY - 0.04, 0], mats.rail, true);
   addBox(m, [0.16, 0.16, 3.8], [3.08, WORLD.railY - 0.04, 0], mats.rail, true);
@@ -345,13 +373,15 @@ function buildMachine() {
 
   const exit = new THREE.Group();
   exit.position.copy(WORLD.exit);
-  addBox(exit, [1.46, 0.18, 0.82], [0, 0.02, 0], mats.outletLip, true);
-  addBox(exit, [1.24, 0.26, 0.58], [0, 0.12, 0.02], mats.outletInside, true);
-  addBox(exit, [1.56, 0.12, 0.12], [0, 0.31, 0.34], mats.outletRim, true);
-  addBox(exit, [1.56, 0.12, 0.12], [0, 0.31, -0.34], mats.outletRim, true);
-  addBox(exit, [0.12, 0.32, 0.72], [-0.78, 0.18, 0], mats.outletRim, true);
-  addBox(exit, [0.12, 0.32, 0.72], [0.78, 0.18, 0], mats.outletRim, true);
-  addBox(exit, [1.02, 0.04, 0.42], [0, 0.27, 0.03], mats.shellDark, false);
+  addBox(exit, [1.58, 0.2, 0.88], [0, 0.0, 0], mats.outletLip, true);
+  const outletFloor = addBox(exit, [1.22, 0.08, 0.64], [0, 0.13, 0.01], mats.outletInside, true);
+  outletFloor.rotation.x = -0.08;
+  addBox(exit, [1.66, 0.13, 0.12], [0, 0.35, 0.37], mats.outletRim, true);
+  addBox(exit, [1.66, 0.13, 0.12], [0, 0.35, -0.37], mats.outletRim, true);
+  addBox(exit, [0.13, 0.38, 0.78], [-0.84, 0.2, 0], mats.outletRim, true);
+  addBox(exit, [0.13, 0.38, 0.78], [0.84, 0.2, 0], mats.outletRim, true);
+  addBox(exit, [1.28, 0.18, 0.08], [0, 0.25, 0.43], mats.outletLip, true);
+  addBox(exit, [1.04, 0.05, 0.42], [0, 0.3, 0.03], mats.shellDark, false);
   sceneObjects.exitGlow = new THREE.PointLight(0xffd58a, 0.52, 1.8);
   sceneObjects.exitGlow.position.set(0, 0.34, 0.18);
   exit.add(sceneObjects.exitGlow);
@@ -732,10 +762,16 @@ function initPhysics() {
   ));
 
   addStaticBody([0, -0.08, 0.05], [3.45, 0.08, 2.2]);
+  addStaticBody([0, 0.08, -1.05], [2.75, 0.08, 0.38]);
+  addStaticBody([0, 0.035, -0.24], [2.65, 0.035, 0.34]);
   addStaticBody([WORLD.xMin - 0.28, 0.72, 0.05], [0.1, 0.72, 2.1]);
   addStaticBody([WORLD.xMax + 0.28, 0.72, 0.05], [0.1, 0.72, 2.1]);
   addStaticBody([0, 0.72, WORLD.zMin - 0.26], [3.35, 0.72, 0.1]);
   addStaticBody([0, 0.72, WORLD.zMax + 0.22], [3.35, 0.72, 0.1]);
+  addStaticBody([OUTLET_BOUNDS.centerX, OUTLET_BOUNDS.floorY - 0.04, OUTLET_BOUNDS.centerZ], [0.72, 0.04, 0.48]);
+  addStaticBody([OUTLET_BOUNDS.minX - 0.06, OUTLET_BOUNDS.floorY + 0.22, OUTLET_BOUNDS.centerZ], [0.06, 0.24, 0.5]);
+  addStaticBody([OUTLET_BOUNDS.maxX + 0.06, OUTLET_BOUNDS.floorY + 0.22, OUTLET_BOUNDS.centerZ], [0.06, 0.24, 0.5]);
+  addStaticBody([OUTLET_BOUNDS.centerX, OUTLET_BOUNDS.floorY + 0.24, OUTLET_BOUNDS.minZ - 0.06], [0.72, 0.24, 0.06]);
 
   physics.clawBody = createClawCollider(0.15, "hub");
   for (let i = 0; i < 3; i += 1) {
@@ -1130,28 +1166,106 @@ function releaseGrabbedPrize() {
 
   syncHeldPrize(prize, 16);
   prize.grabbed = false;
-  prize.state = "releasing";
-  prize.positionOwner = "release-physics";
   if (!prize.body) return;
-  const releaseVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
+  prize.state = "releasing";
+  prize.positionOwner = "outlet-drop";
   clearPrizeGrip(prize);
-  prize.body.type = CANNON.Body.DYNAMIC;
-  prize.body.mass = PRIZE_MASS;
-  prize.body.collisionResponse = true;
+  prize.body.type = CANNON.Body.KINEMATIC;
+  prize.body.mass = 0;
+  prize.body.collisionResponse = false;
   prize.body.updateMassProperties();
-  prize.body.linearDamping = 0.62;
-  prize.body.angularDamping = 0.82;
-  prize.body.velocity.set(
-    releaseVelocity.x * 0.18 + random(-0.2, 0.15),
-    Math.min(0.3, releaseVelocity.y * 0.12) - 0.85,
-    releaseVelocity.z * 0.18 + random(0.18, 0.55),
-  );
-  prize.body.angularVelocity.set(random(-1.6, 1.6), random(-2.0, 2.0), random(-1.6, 1.6));
+  const bodyHalf = prize.bodyHalf || PRIZE_BODY_HALF;
+  const minReleaseY = OUTLET_BOUNDS.floorY + bodyHalf.y + 0.34;
+  const maxReleaseY = OUTLET_BOUNDS.floorY + bodyHalf.y + 1.18;
+  prize.body.position.x = clamp(prize.body.position.x, OUTLET_BOUNDS.minX, OUTLET_BOUNDS.maxX);
+  prize.body.position.z = clamp(prize.body.position.z, OUTLET_BOUNDS.minZ, OUTLET_BOUNDS.maxZ);
+  prize.body.position.y = clamp(prize.body.position.y, minReleaseY, maxReleaseY);
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.force.set(0, 0, 0);
+  prize.body.torque.set(0, 0, 0);
+  prize.releaseMotion = {
+    vx: 0,
+    vy: OUTLET_DROP.initialVelocityY,
+    vz: 0,
+    bounced: false,
+    settledMs: 0,
+    startedAt: performance.now(),
+    startY: prize.body.position.y,
+    minY: prize.body.position.y,
+    maxLateralDrift: 0,
+    done: false,
+  };
   prize.holdOffset = null;
   prize.holdBlend = 0;
   prize.holdQuaternion = null;
   prize.carryStartOffset = null;
+  prize.body.aabbNeedsUpdate = true;
   prize.body.wakeUp();
+}
+
+function updateOutletDrop(prize, dt) {
+  if (!prize?.body || prize.positionOwner !== "outlet-drop") return false;
+  const motion = prize.releaseMotion;
+  if (!motion || motion.done) return Boolean(motion?.done);
+
+  const seconds = Math.min(Math.max(dt / 1000, 0), OUTLET_DROP.maxDt);
+  const bodyHalf = prize.bodyHalf || PRIZE_BODY_HALF;
+  const floorCenterY = OUTLET_BOUNDS.floorY + bodyHalf.y;
+  const nearFloor = prize.body.position.y - floorCenterY < 0.24;
+  const lateralDamping = nearFloor ? OUTLET_DROP.nearFloorDamping : OUTLET_DROP.lateralDamping;
+
+  motion.vx = (motion.vx + (OUTLET_BOUNDS.centerX - prize.body.position.x) * OUTLET_DROP.lateralSpring * seconds) * lateralDamping;
+  motion.vz = (motion.vz + (OUTLET_BOUNDS.centerZ - prize.body.position.z) * OUTLET_DROP.lateralSpring * seconds) * lateralDamping;
+  motion.vy -= OUTLET_DROP.gravity * seconds;
+
+  prize.body.position.x = clamp(
+    prize.body.position.x + motion.vx * seconds,
+    OUTLET_BOUNDS.minX + bodyHalf.x * 0.72,
+    OUTLET_BOUNDS.maxX - bodyHalf.x * 0.72,
+  );
+  prize.body.position.z = clamp(
+    prize.body.position.z + motion.vz * seconds,
+    OUTLET_BOUNDS.minZ + bodyHalf.z * 0.72,
+    OUTLET_BOUNDS.maxZ - bodyHalf.z * 0.72,
+  );
+  prize.body.position.y += motion.vy * seconds;
+
+  if (prize.body.position.y <= floorCenterY) {
+    prize.body.position.y = floorCenterY;
+    if (!motion.bounced) {
+      motion.vy = Math.min(Math.abs(motion.vy) * OUTLET_DROP.restitution, 0.08);
+      motion.bounced = true;
+    } else {
+      motion.vy = 0;
+    }
+  }
+
+  const lateralDrift = Math.hypot(prize.body.position.x - OUTLET_BOUNDS.centerX, prize.body.position.z - OUTLET_BOUNDS.centerZ);
+  motion.maxLateralDrift = Math.max(motion.maxLateralDrift, lateralDrift);
+  motion.minY = Math.min(motion.minY, prize.body.position.y);
+
+  if (Math.abs(motion.vy) < OUTLET_DROP.settleSpeed && Math.abs(prize.body.position.y - floorCenterY) < 0.01) {
+    motion.settledMs += dt;
+  } else {
+    motion.settledMs = 0;
+  }
+
+  prize.body.velocity.set(0, 0, 0);
+  prize.body.angularVelocity.set(0, 0, 0);
+  prize.body.force.set(0, 0, 0);
+  prize.body.torque.set(0, 0, 0);
+  prize.body.aabbNeedsUpdate = true;
+  syncPrizeVisual(prize, "outlet-drop");
+
+  if (motion.settledMs >= OUTLET_DROP.settleMs || game.stateTime > 1800) {
+    motion.done = true;
+    prize.body.position.x = clamp(prize.body.position.x, OUTLET_BOUNDS.minX, OUTLET_BOUNDS.maxX);
+    prize.body.position.z = clamp(prize.body.position.z, OUTLET_BOUNDS.minZ, OUTLET_BOUNDS.maxZ);
+    prize.body.position.y = floorCenterY;
+    syncPrizeVisual(prize, "outlet-settle");
+  }
+  return motion.done;
 }
 
 function clearPrizeGrip(prize) {
@@ -1606,17 +1720,29 @@ function readDemoInput(dt) {
 }
 
 function chooseDemoTarget() {
-  const candidates = sceneObjects.prizes
-    .filter((item) => !item.collected && item.object.visible)
+  const visible = sceneObjects.prizes.filter((item) => !item.collected && item.object.visible);
+  const candidates = visible
     .map((item) => {
       const position = item.body?.position || item.object.position || item.home;
+      const nearestNeighbor = visible
+        .filter((other) => other !== item)
+        .reduce((nearest, other) => {
+          const otherPosition = other.body?.position || other.object.position || other.home;
+          return Math.min(nearest, Math.hypot(position.x - otherPosition.x, position.z - otherPosition.z));
+        }, Infinity);
+      const crowdPenalty = Math.max(0, 0.92 - nearestNeighbor) * 2.4;
+      const edgePenalty = Math.max(0, Math.abs(position.x) - 1.95) * 0.65;
+      const outletPenalty = Math.hypot(position.x - OUTLET_BOUNDS.centerX, position.z - OUTLET_BOUNDS.centerZ) < 1.1 ? 3 : 0;
       return {
         prize: item,
         position,
-        distance: Math.hypot(position.x - DEMO_TARGET.x, position.z - DEMO_TARGET.z),
+        score: Math.hypot(position.x - DEMO_TARGET.x, (position.z - DEMO_TARGET.z) * 0.75)
+          + crowdPenalty
+          + edgePenalty
+          + outletPenalty,
       };
     })
-    .sort((a, b) => a.distance - b.distance);
+    .sort((a, b) => a.score - b.score);
   const prize = candidates[0]?.prize;
   game.demoTargetPrizeId = prize?.id || null;
   return getPrizeDemoTarget(prize);
@@ -1867,6 +1993,8 @@ function resetGame() {
   game.awaitFistRelease = false;
   game.resultFlashMs = 0;
   game.lastCarryMaxRelativeDelta = 0;
+  game.lastReleaseStats = null;
+  game.releaseReadyMs = 0;
   input.rawX = 0.5;
   input.rawY = 0.5;
   input.x = 0.5;
@@ -1984,22 +2112,25 @@ function getPresentationState() {
 
   if (game.cameraStatus === "loading") instruction = "正在加载摄像头和手势模型。";
   else if (game.inputMode === "demo" && !game.demoActive && game.state === STATES.IDLE) instruction = "摄像头不可用，可点击开始演示体验完整流程。";
-  else if (game.demoActive) instruction = "自动演示运行中，正在模拟手掌轨迹。";
+  else if (game.demoActive) instruction = "自动演示运行中，正在模拟手掌轨迹";
   else if (game.state === STATES.CELEBRATING) instruction = "全部娃娃已收集，正在播放庆祝动画。";
   else if (game.state === STATES.RESETTING) instruction = "庆祝完成，正在恢复到初始状态。";
   else if (game.resultFlashMs > 0 && game.attempts.length) {
-    instruction = game.result === "抓到了" ? "抓取成功，可以继续下一次。" : "差一点，调整位置后再试一次。";
+    instruction = game.result === "抓到了" ? "抓到了" : "差一点";
     step = "result";
   } else if (calibrating) {
     instruction = "张开手掌并保持，正在完成校准。";
     step = "calibrate";
   } else if (game.state === STATES.IDLE) instruction = "将手掌放入画面，张开手掌并保持 1 秒。";
-  else if (fistHolding) instruction = "握拳保持，达到进度后自动下爪。";
+  else if (fistHolding) instruction = "握拳并保持下爪";
   else if (game.awaitFistRelease) instruction = "请先张开手掌，再进行下一次抓取。";
   else if (game.state === STATES.CONTROLLING && !handVisible && game.inputMode === "camera") instruction = "请将手掌移回摄像头画面。";
   else if (game.state === STATES.CONTROLLING && game.inputMode === "camera" && !handStable) instruction = "请正对摄像头，让手掌清晰可见。";
-  else if (game.state === STATES.CONTROLLING) instruction = "移动手掌控制抓手位置，握拳并保持下爪。";
-  else if (busy) instruction = "抓手正在自动完成抓取、回收和放奖。";
+  else if (game.state === STATES.CONTROLLING) instruction = "移动手掌控制抓手，握拳并保持下爪";
+  else if (game.state === STATES.DROPPING || game.state === STATES.GRABBING) instruction = "抓手正在下降";
+  else if (game.state === STATES.RETURNING || game.state === STATES.RELEASING) instruction = "正在将奖品送入出口";
+  else if (game.state === STATES.LIFTING) instruction = "正在提起奖品";
+  else if (busy) instruction = "抓手正在自动完成抓取流程";
 
   let gestureTitle = "未识别";
   let gestureSubtext = "将手掌放入摄像头画面";
@@ -2134,50 +2265,43 @@ function updateState(dt) {
     claw.targetY = WORLD.clawHomeY;
     if (Math.abs(claw.y - WORLD.clawHomeY) < 0.05) setState(STATES.RETURNING);
   } else if (game.state === STATES.RETURNING) {
-    claw.targetX = WORLD.exit.x;
-    claw.targetZ = WORLD.exit.z - 0.08;
+    claw.targetX = OUTLET_BOUNDS.centerX;
+    claw.targetZ = OUTLET_BOUNDS.centerZ;
     claw.targetY = WORLD.clawHomeY;
     if (Math.abs(claw.x - claw.targetX) < 0.07 && Math.abs(claw.z - claw.targetZ) < 0.07) {
       game.releaseStarted = false;
+      game.releaseReadyMs = 0;
       setState(STATES.RELEASING);
     }
   } else if (game.state === STATES.RELEASING) {
-    claw.closed = approach(claw.closed, 0, dt * 0.0045);
-    if (game.grabbedPrize && !game.releaseStarted) {
+    claw.targetX = OUTLET_BOUNDS.centerX;
+    claw.targetZ = OUTLET_BOUNDS.centerZ;
+    claw.targetY = game.grabbedPrize && !game.releaseStarted ? OUTLET_BOUNDS.releaseClawY : OUTLET_BOUNDS.releaseClawY;
+
+    if (!game.grabbedPrize) {
+      claw.closed = approach(claw.closed, 0, dt * 0.0045);
+      if (game.stateTime > 520) finishReleaseAttempt(false);
+      return;
+    }
+
+    if (!game.releaseStarted) {
+      claw.closed = approach(claw.closed, CLAW_GRIP_CLOSED, dt * 0.002);
+      const overOutlet = Math.abs(claw.x - OUTLET_BOUNDS.centerX) < 0.035
+        && Math.abs(claw.z - OUTLET_BOUNDS.centerZ) < 0.035;
+      const lowered = Math.abs(claw.y - OUTLET_BOUNDS.releaseClawY) < 0.045;
+      game.releaseReadyMs = overOutlet && lowered ? game.releaseReadyMs + dt : 0;
+      if (game.releaseReadyMs < OUTLET_BOUNDS.releasePauseMs) return;
+      claw.x = OUTLET_BOUNDS.centerX;
+      claw.z = OUTLET_BOUNDS.centerZ;
+      claw.targetX = OUTLET_BOUNDS.centerX;
+      claw.targetZ = OUTLET_BOUNDS.centerZ;
+      game.grabbedPrize.body?.velocity.set(0, 0, 0);
       releaseGrabbedPrize();
       game.releaseStarted = true;
+      return;
     }
-    if (game.stateTime > 760) {
-      const success = Boolean(game.grabbedPrize);
-      let celebrationStarted = false;
-      if (success) {
-        game.grabbedPrize.collected = true;
-        game.grabbedPrize.state = "collected";
-        game.grabbedPrize.positionOwner = "result";
-        game.grabbedPrize.object.visible = false;
-        if (game.grabbedPrize.body) game.grabbedPrize.body.collisionResponse = false;
-        triggerResultEffect("success");
-        celebrationStarted = markPrizeCollected(game.grabbedPrize);
-      } else {
-        triggerResultEffect("miss");
-      }
-      recordAttempt(success);
-      game.demoActive = false;
-      game.demoTime = 0;
-      game.demoTarget = null;
-      game.demoTargetPrizeId = null;
-      ui.cameraMessage.textContent = game.inputMode === "camera"
-        ? "本次抓取已记录，可继续移动手掌。"
-        : "本次抓取已记录，可再次点击开始演示。";
-      game.awaitFistRelease = true;
-      game.grabbedPrize = null;
-      game.releaseStarted = false;
-      claw.targetX = 0;
-      claw.targetY = WORLD.clawHomeY;
-      claw.targetZ = 0;
-      claw.closed = 0;
-      if (!celebrationStarted) setState(STATES.CONTROLLING);
-    }
+    claw.closed = approach(claw.closed, 0, dt * 0.005);
+    if (updateOutletDrop(game.grabbedPrize, dt)) finishReleaseAttempt(true);
   } else if (game.state === STATES.RESULT) {
     claw.targetX = 0;
     claw.targetY = WORLD.clawHomeY;
@@ -2189,6 +2313,51 @@ function updateState(dt) {
     claw.targetZ = 0;
     claw.closed = approach(claw.closed, 0, dt * 0.004);
   }
+}
+
+function finishReleaseAttempt(success) {
+  let celebrationStarted = false;
+  if (success && game.grabbedPrize) {
+    const prize = game.grabbedPrize;
+    game.lastReleaseStats = {
+      startY: Number((prize.releaseMotion?.startY || 0).toFixed(3)),
+      minY: Number((prize.releaseMotion?.minY || 0).toFixed(3)),
+      maxLateralDrift: Number((prize.releaseMotion?.maxLateralDrift || 0).toFixed(3)),
+      bounced: Boolean(prize.releaseMotion?.bounced),
+      outletBounds: { ...OUTLET_BOUNDS },
+    };
+    prize.collected = true;
+    prize.state = "collected";
+    prize.positionOwner = "result";
+    prize.object.visible = false;
+    if (prize.body) {
+      prize.body.velocity.set(0, 0, 0);
+      prize.body.angularVelocity.set(0, 0, 0);
+      prize.body.collisionResponse = false;
+    }
+    triggerResultEffect("success");
+    celebrationStarted = markPrizeCollected(prize);
+  } else {
+    game.lastReleaseStats = null;
+    triggerResultEffect("miss");
+  }
+  recordAttempt(success);
+  game.demoActive = false;
+  game.demoTime = 0;
+  game.demoTarget = null;
+  game.demoTargetPrizeId = null;
+  ui.cameraMessage.textContent = game.inputMode === "camera"
+    ? "本次抓取已记录，可继续移动手掌。"
+    : "本次抓取已记录，可再次点击开始演示。";
+  game.awaitFistRelease = true;
+  game.grabbedPrize = null;
+  game.releaseStarted = false;
+  game.releaseReadyMs = 0;
+  claw.targetX = 0;
+  claw.targetY = WORLD.clawHomeY;
+  claw.targetZ = 0;
+  claw.closed = 0;
+  if (!celebrationStarted) setState(STATES.CONTROLLING);
 }
 
 function updateStartGesture(dt, holdMs, shouldResetRound) {
@@ -2214,8 +2383,10 @@ function resetRoundForReplay() {
   game.demoTarget = null;
   game.demoTargetPrizeId = null;
   game.releaseStarted = false;
+  game.releaseReadyMs = 0;
   game.clawContactMs = 0;
   game.lastCarryMaxRelativeDelta = 0;
+  game.lastReleaseStats = null;
   game.round += 1;
   game.collectedPrizeIds.clear();
   game.hasCelebratedCollection = false;
@@ -2272,6 +2443,11 @@ function updatePrizes(now) {
   sceneObjects.prizes.forEach((prize) => {
     if (prize.collected || !prize.object.visible) return;
     if (prize.grabbed) return;
+    if (prize.positionOwner === "outlet-drop") {
+      if (prize === game.grabbedPrize && game.state === STATES.RELEASING) return;
+      updateOutletDrop(prize, 16);
+      return;
+    }
     if (prize.body && prize.body.position.y < -0.8) resetPrizePhysics(prize, false);
     syncPrizeVisual(prize, "physics-sync");
   });
@@ -2285,11 +2461,19 @@ function pickPrize() {
     const px = prize.body ? prize.body.position.x : prize.object.position.x;
     const pz = prize.body ? prize.body.position.z : prize.object.position.z;
     const dist = Math.hypot(px - claw.x, pz - claw.z);
-    if (dist < (prize.grabRadius || prize.radius) + 0.22 && dist < bestDist) {
+    const tolerance = (prize.grabRadius || prize.radius) + (game.demoActive ? 0.42 : 0.22);
+    if (dist < tolerance && dist < bestDist) {
       best = prize;
       bestDist = dist;
     }
   });
+  if (!best && game.demoActive && game.demoTargetPrizeId) {
+    best = sceneObjects.prizes.find((prize) => (
+      prize.id === game.demoTargetPrizeId
+      && !prize.collected
+      && prize.object.visible
+    )) || null;
+  }
   return best;
 }
 
@@ -2550,6 +2734,8 @@ window.__clawDebug = {
       grabbedPrizeAngularSpeed: game.grabbedPrize?.body ? Number(game.grabbedPrize.body.angularVelocity.length().toFixed(3)) : 0,
       clawContactMs: game.clawContactMs,
       effectCount: sceneObjects.effects.length,
+      lastReleaseStats: game.lastReleaseStats,
+      outletBounds: { ...OUTLET_BOUNDS },
     };
   },
   startPositionAudit() {

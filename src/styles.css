@@ -363,17 +363,17 @@ h1 {
 .gesture-hud {
   position: absolute;
   left: 50%;
-  top: auto;
-  bottom: clamp(82px, 10vh, 118px);
+  top: clamp(86px, 9.8vh, 104px);
+  bottom: auto;
   z-index: 5;
-  width: min(470px, calc(100% - 440px));
-  max-width: min(470px, calc(100% - 440px));
-  min-height: 68px;
+  width: min(410px, calc(100% - 720px));
+  max-width: min(410px, calc(100% - 720px));
+  min-height: 52px;
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 9px;
+  padding: 7px 10px;
   border: 1px solid rgba(244, 247, 248, 0.12);
   border-radius: 999px;
   background: rgba(4, 8, 12, 0.62);
@@ -383,15 +383,15 @@ h1 {
 }
 
 .gesture-icon {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
   border: 1px solid rgba(147, 165, 178, 0.28);
   border-radius: 50%;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.04);
-  font-size: 26px;
+  font-size: 21px;
 }
 
 .gesture-icon[data-tone="ready"] {
@@ -411,13 +411,13 @@ h1 {
 
 .gesture-hud strong {
   display: block;
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1.2;
 }
 
 .gesture-hud span {
   display: block;
-  margin-top: 5px;
+  margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
@@ -425,8 +425,8 @@ h1 {
 
 .hold-ring {
   --progress: 0deg;
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   background:
     radial-gradient(circle at center, rgba(7, 11, 18, 0.96) 58%, transparent 60%),
@@ -508,12 +508,21 @@ h1 {
 .instruction-card {
   position: absolute;
   left: 50%;
-  bottom: clamp(158px, 18vh, 190px);
-  width: min(540px, calc(100vw - 520px));
-  min-width: 360px;
-  padding: 14px 18px;
+  top: clamp(16px, 1.8vh, 24px);
+  bottom: auto;
+  width: min(560px, calc(100vw - 760px));
+  min-width: 420px;
+  height: 60px;
+  min-height: 60px;
+  display: grid;
+  place-content: center;
+  padding: 8px 18px;
   text-align: center;
   transform: translateX(-50%);
+  transition:
+    opacity 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
 }
 
 .label {
@@ -523,17 +532,27 @@ h1 {
   font-size: 12px;
 }
 
+.instruction-card .label {
+  display: none;
+}
+
 .instruction-card strong {
   display: block;
-  font-size: clamp(18px, 2vw, 24px);
-  line-height: 1.35;
+  overflow: hidden;
+  font-size: clamp(16px, 1.45vw, 20px);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .instruction-card p {
-  margin: 7px 0 0;
+  overflow: hidden;
+  margin: 3px 0 0;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .progress-steps {
