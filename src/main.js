@@ -4,6 +4,9 @@ import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import * as CANNON from "cannon-es";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { COLOR_VARIANTS } from "./game/prizes/prizeManifest.js";
+import { createPrizeRound } from "./game/prizes/prizeLayout.js";
+import { normalizeSeed } from "./game/prizes/seededRandom.js";
 
 const canvas = document.getElementById("game-canvas");
 const video = document.getElementById("camera-video");
@@ -120,6 +123,7 @@ const game = {
   demoActive: false,
   demoTime: 0,
   demoTarget: null,
+  demoTargetPrizeId: null,
   round: 0,
   sessionActive: false,
   sessionElapsedMs: 0,
@@ -128,6 +132,10 @@ const game = {
   collectedPrizeIds: new Set(),
   hasCelebratedCollection: false,
   celebrationCount: 0,
+  roundSeed: 0,
+  roundSignature: "",
+  generatedRoundIndex: 0,
+  debugPrizes: false,
   awaitFistRelease: false,
   cameraStatus: "loading",
   cameraProblem: "",
@@ -157,6 +165,8 @@ const HELD_CLAW_TRAVEL_SPEED = 0.00145;
 const CARRY_RELATIVE_WARN_THRESHOLD = 0.035;
 const DEMO_TARGET = { x: 0.18, z: 1.05 };
 const CELEBRATION_SRC_DEFAULT = "/animations/celebration-confetti.json";
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const DEBUG_SEED = URL_PARAMS.has("seed") ? normalizeSeed(URL_PARAMS.get("seed")) : null;
 const physics = {
   world: null,
   prizeMaterial: null,
@@ -190,6 +200,7 @@ let celebrationLoadedSource = "";
 let celebrationRunId = 0;
 let celebrationPendingResolve = null;
 const celebrationTimers = new Set();
+const prizeTemplateCache = new Map();
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -247,15 +258,6 @@ const mats = {
   shadow: new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.34 }),
 };
 
-const PRIZE_ASSETS = [
-  "/assets/models/3d/prizes/animal-bunny.glb",
-  "/assets/models/3d/prizes/animal-cat.glb",
-  "/assets/models/3d/prizes/animal-dog.glb",
-  "/assets/models/3d/prizes/animal-panda.glb",
-  "/assets/models/3d/prizes/animal-penguin.glb",
-  "/assets/models/3d/prizes/animal-tiger.glb",
-];
-
 let handLandmarker = null;
 let cameraStarted = false;
 let animationFrameId = 0;
@@ -266,8 +268,7 @@ buildLights();
 buildMachine();
 buildClaw();
 initPhysics();
-buildPrizePlaceholders();
-loadPrizeModels();
+game.debugPrizes = URL_PARAMS.get("debugPrizes") === "1";
 resizeRenderer();
 window.addEventListener("resize", resizeRenderer);
 
@@ -427,36 +428,57 @@ function addJoint(parent, x, y, z, radius) {
   return mesh;
 }
 
-function buildPrizePlaceholders() {
-  const positions = [
-    [-2.05, 0, -0.92],
-    [-0.75, 0, -1.08],
-    [0.75, 0, -0.94],
-    [2.0, 0, -1.04],
-    [-2.25, 0, 0.18],
-    [-0.55, 0, 0.12],
-    [0.9, 0, 0.18],
-    [2.15, 0, 0.1],
-    [-1.65, 0, 1.05],
-    [0.18, 0, 1.05],
-  ];
+function buildPrizeRound({ resetProgress = true } = {}) {
+  clearCurrentPrizes();
+  if (resetProgress) {
+    game.collectedPrizeIds.clear();
+    game.hasCelebratedCollection = false;
+    game.grabbedPrize = null;
+    game.demoTarget = null;
+    game.demoTargetPrizeId = null;
+  }
 
-  positions.forEach((pos, index) => {
-    const mesh = createPlushPlaceholder(index);
-    mesh.position.set(pos[0], 0, pos[2]);
+  const seed = getNextRoundSeed();
+  const round = createPrizeRound({
+    seed,
+    previousSignature: game.roundSignature,
+  });
+  game.roundSeed = round.seed;
+  game.roundSignature = round.signature;
+  if (import.meta.env.DEV) console.info("Prize round seed:", round.seed);
+
+  round.prizes.forEach((roundPrize, index) => {
+    const definition = roundPrize.definition;
+    const mesh = createPlushPlaceholder(index, roundPrize.colorVariant);
+    applyRoundTransform(mesh, roundPrize.transform);
     sceneObjects.machine.add(mesh);
 
+    const bodyHalf = getPrizeBodyHalf(definition, roundPrize.transform.scale);
     const prize = {
-      id: `prize-${index}`,
+      id: roundPrize.instanceId,
+      instanceId: roundPrize.instanceId,
+      definitionId: definition.id,
+      definition,
       object: mesh,
+      visual: mesh,
+      state: "available",
       home: mesh.position.clone(),
-      radius: 0.46,
+      spawnTransform: roundPrize.transform,
+      colorVariant: roundPrize.colorVariant,
+      radius: definition.grabRadius * roundPrize.transform.scale,
+      grabRadius: definition.grabRadius * roundPrize.transform.scale,
+      grabOffset: new CANNON.Vec3(
+        definition.grabOffset[0] * roundPrize.transform.scale,
+        definition.grabOffset[1] * roundPrize.transform.scale,
+        definition.grabOffset[2] * roundPrize.transform.scale,
+      ),
+      bodyHalf,
       grabbed: false,
       collected: false,
-      positionOwner: "physics",
-      wobble: Math.random() * Math.PI * 2,
+      positionOwner: "layout",
+      wobble: 0,
       body: null,
-      bodyOffsetY: PRIZE_BODY_OFFSET_Y,
+      bodyOffsetY: bodyHalf.y,
       holdSpin: 0,
       holdOffset: null,
       holdBlend: 0,
@@ -465,14 +487,23 @@ function buildPrizePlaceholders() {
       carryStartOffset: null,
       carryMaxRelativeDelta: 0,
       gripConstraints: [],
+      debugHelpers: [],
     };
     createPrizeBody(prize);
+    if (game.debugPrizes) addPrizeDebugHelpers(prize);
     sceneObjects.prizes.push(prize);
   });
+
+  loadPrizeModelsForRound(round.seed);
+  preloadPrizeTemplates();
+  ui.cameraMessage.textContent = "正在准备奖品，新一轮布局已生成。";
 }
 
-function createPlushPlaceholder(index) {
-  const color = [0xff9f43, 0x55efc4, 0x73d2ff, 0xff5f7e, 0xd5a7ff, 0xffd776][index % 6];
+function createPlushPlaceholder(index, colorVariant = null) {
+  const fallbackColors = [0xff9f43, 0x55efc4, 0x73d2ff, 0xff5f7e, 0xd5a7ff, 0xffd776];
+  const color = colorVariant && COLOR_VARIANTS[colorVariant]
+    ? new THREE.Color(COLOR_VARIANTS[colorVariant]).getHex()
+    : fallbackColors[index % fallbackColors.length];
   const material = new THREE.MeshStandardMaterial({ color, roughness: 0.62, metalness: 0.02 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.7 });
   const group = new THREE.Group();
@@ -500,41 +531,169 @@ function createPlushPlaceholder(index) {
   return group;
 }
 
-async function loadPrizeModels() {
-  const selected = sceneObjects.prizes;
-  await Promise.allSettled(
-    selected.map(async (prize, index) => {
-      const gltf = await loader.loadAsync(PRIZE_ASSETS[index % PRIZE_ASSETS.length]);
+async function loadPrizeModelsForRound(seed) {
+  const prizes = [...sceneObjects.prizes];
+  const results = await Promise.allSettled(prizes.map(async (prize) => {
+    const template = await loadPrizeTemplate(prize.definition);
+    if (game.roundSeed !== seed || !sceneObjects.prizes.includes(prize) || prize.collected) return;
+    const model = template.clone(true);
+    preparePrizeInstanceMaterials(model, prize);
+    applyRoundTransform(model, prize.spawnTransform);
+    sceneObjects.machine.add(model);
+    sceneObjects.machine.remove(prize.object);
+    disposeObject(prize.object, { disposeShared: true });
+    prize.object = model;
+    prize.visual = model;
+    syncPrizeVisual(prize, "model-load");
+  }));
+
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.warn("Prize model failed, using placeholder fallback", {
+        definitionId: prizes[index]?.definitionId,
+        error: result.reason?.message || result.reason,
+      });
+    }
+  });
+}
+
+async function loadPrizeTemplate(definition) {
+  if (!prizeTemplateCache.has(definition.id)) {
+    const promise = loader.loadAsync(definition.url).then((gltf) => {
+      const wrapper = new THREE.Group();
       const model = gltf.scene;
-      const originalHome = prize.home.clone();
-      normalizeModel(model, 0.82);
-      model.position.copy(originalHome);
-      model.rotation.y = random(-0.4, 0.4);
+      wrapper.add(model);
+      normalizeModel(model, definition);
       model.traverse((child) => {
         if (child.isMesh) {
           child.castShadow = true;
           child.receiveShadow = true;
+          if (child.material) {
+            const materials = Array.isArray(child.material) ? child.material : [child.material];
+            materials.forEach((material) => {
+              if ("metalness" in material) material.metalness = Math.min(material.metalness || 0, 0.05);
+              if ("roughness" in material) material.roughness = Math.max(material.roughness || 0.7, 0.82);
+              if ("envMapIntensity" in material) material.envMapIntensity = Math.min(material.envMapIntensity || 1, 0.55);
+            });
+          }
         }
       });
-      sceneObjects.machine.add(model);
-      sceneObjects.machine.remove(prize.object);
-      prize.object = model;
-      prize.home.copy(originalHome);
-      prize.radius = 0.5;
-      syncPrizeVisual(prize);
-    }),
+      return wrapper;
+    }).catch((error) => {
+      prizeTemplateCache.delete(definition.id);
+      throw error;
+    });
+    prizeTemplateCache.set(definition.id, promise);
+  }
+  return prizeTemplateCache.get(definition.id);
+}
+
+function normalizeModel(model, definition) {
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = (definition.baseScale || 1) * definition.targetHeight / Math.max(size.y, 0.001);
+  model.scale.multiplyScalar(scale);
+  model.updateMatrixWorld(true);
+
+  const nextBox = new THREE.Box3().setFromObject(model);
+  const center = nextBox.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= nextBox.min.y;
+  model.position.y += definition.groundOffset || 0;
+
+  if (definition.rotationOffset) {
+    model.rotation.x += definition.rotationOffset[0];
+    model.rotation.y += definition.rotationOffset[1];
+    model.rotation.z += definition.rotationOffset[2];
+  }
+}
+
+function preparePrizeInstanceMaterials(model, prize) {
+  if (!prize.colorVariant || !COLOR_VARIANTS[prize.colorVariant]) return;
+  const color = new THREE.Color(COLOR_VARIANTS[prize.colorVariant]);
+  model.traverse((child) => {
+    if (!child.isMesh || !child.material || !canRecolorMaterial(child)) return;
+    if (Array.isArray(child.material)) {
+      child.material = child.material.map((material) => recolorMaterial(material, color));
+    } else {
+      child.material = recolorMaterial(child.material, color);
+    }
+  });
+}
+
+function canRecolorMaterial(mesh) {
+  const name = `${mesh.name || ""} ${mesh.material?.name || ""}`.toLowerCase();
+  if (/eye|mouth|nose|wheel|black|glass|metal/.test(name)) return false;
+  return /body|fur|main|box|gift|material/.test(name);
+}
+
+function recolorMaterial(material, color) {
+  const cloned = material.clone();
+  if (cloned.color) cloned.color.copy(color);
+  if ("metalness" in cloned) cloned.metalness = 0;
+  if ("roughness" in cloned) cloned.roughness = Math.max(cloned.roughness || 0.7, 0.86);
+  cloned.userData = { ...(cloned.userData || {}), instanceMaterial: true };
+  return cloned;
+}
+
+function applyRoundTransform(object, transform) {
+  object.position.set(transform.position.x, transform.position.y, transform.position.z);
+  object.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
+  object.scale.setScalar(transform.scale);
+}
+
+function getPrizeBodyHalf(definition, scale) {
+  const size = definition.collider.size;
+  return new CANNON.Vec3(
+    Math.max(0.12, size[0] * scale * 0.5),
+    Math.max(0.12, size[1] * scale * 0.5),
+    Math.max(0.12, size[2] * scale * 0.5),
   );
 }
 
-function normalizeModel(model, targetHeight) {
-  const box = new THREE.Box3().setFromObject(model);
-  const size = box.getSize(new THREE.Vector3());
-  const scale = targetHeight / Math.max(size.y, 0.001);
-  model.scale.multiplyScalar(scale);
-  const nextBox = new THREE.Box3().setFromObject(model);
-  const center = nextBox.getCenter(new THREE.Vector3());
-  model.position.sub(center);
-  model.position.y += targetHeight / 2;
+function getNextRoundSeed() {
+  if (DEBUG_SEED !== null) {
+    const seed = (DEBUG_SEED + game.generatedRoundIndex) >>> 0;
+    game.generatedRoundIndex += 1;
+    return seed;
+  }
+  const values = new Uint32Array(1);
+  crypto.getRandomValues(values);
+  return values[0] >>> 0;
+}
+
+function clearCurrentPrizes() {
+  sceneObjects.prizes.forEach((prize) => {
+    clearPrizeGrip(prize);
+    if (prize.body && physics.world) physics.world.removeBody(prize.body);
+    prize.debugHelpers?.forEach((helper) => sceneObjects.machine.remove(helper));
+    sceneObjects.machine.remove(prize.object);
+    disposeObject(prize.object, { disposeShared: false });
+  });
+  sceneObjects.prizes = [];
+}
+
+function disposeObject(object, { disposeShared = false } = {}) {
+  object?.traverse?.((child) => {
+    if (!child.isMesh) return;
+    if (disposeShared) child.geometry?.dispose?.();
+    if (!child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    if (disposeShared || materials.some((material) => material.userData?.instanceMaterial)) {
+      materials.forEach((material) => material.dispose?.());
+    }
+  });
+}
+
+function preloadPrizeTemplates() {
+  const schedule = window.requestIdleCallback || ((callback) => window.setTimeout(callback, 600));
+  schedule(() => {
+    sceneObjects.prizes.slice(0, 4).forEach((prize) => {
+      loadPrizeTemplate(prize.definition).catch(() => {});
+    });
+  });
 }
 
 function addBox(parent, size, position, material, castShadow) {
@@ -613,6 +772,7 @@ function createClawCollider(radius, role) {
 
 function createPrizeBody(prize) {
   if (!physics.world) return null;
+  const bodyHalf = prize.bodyHalf || new CANNON.Vec3(PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.y, PRIZE_BODY_HALF.z);
 
   const body = new CANNON.Body({
     mass: PRIZE_MASS,
@@ -623,15 +783,20 @@ function createPrizeBody(prize) {
     sleepSpeedLimit: 0.05,
     sleepTimeLimit: 0.45,
   });
-  body.addShape(new CANNON.Box(new CANNON.Vec3(PRIZE_BODY_HALF.x, PRIZE_BODY_HALF.y, PRIZE_BODY_HALF.z)));
-  body.position.set(prize.home.x, prize.home.y + PRIZE_BODY_OFFSET_Y, prize.home.z);
-  body.quaternion.setFromEuler(0, random(-0.35, 0.35), 0);
+  body.addShape(new CANNON.Box(bodyHalf));
+  body.position.set(prize.home.x, prize.home.y + bodyHalf.y, prize.home.z);
+  body.quaternion.setFromEuler(
+    prize.spawnTransform?.rotation?.x || 0,
+    prize.spawnTransform?.rotation?.y || 0,
+    prize.spawnTransform?.rotation?.z || 0,
+  );
   physics.world.addBody(body);
 
   prize.body = body;
-  prize.bodyOffsetY = PRIZE_BODY_OFFSET_Y;
+  prize.bodyOffsetY = bodyHalf.y;
+  prize.bodyHalf = bodyHalf;
   prize.holdSpin = 0;
-  prize.positionOwner = "physics";
+  prize.positionOwner = "layout";
   syncPrizeVisual(prize);
   return body;
 }
@@ -649,7 +814,40 @@ function syncPrizeVisual(prize, source = prize.positionOwner === "claw" ? "claw-
     prize.body.quaternion.z,
     prize.body.quaternion.w,
   );
+  updatePrizeDebugHelpers(prize);
   recordPrizePositionWrite(source, prize);
+}
+
+function addPrizeDebugHelpers(prize) {
+  const radius = new THREE.Mesh(
+    new THREE.SphereGeometry(prize.grabRadius, 18, 12),
+    new THREE.MeshBasicMaterial({ color: 0x55efc4, wireframe: true, transparent: true, opacity: 0.38 }),
+  );
+  const anchor = new THREE.Mesh(
+    new THREE.SphereGeometry(0.055, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffc857 }),
+  );
+  radius.userData.debugRole = "grab-radius";
+  anchor.userData.debugRole = "grab-anchor";
+  sceneObjects.machine.add(radius);
+  sceneObjects.machine.add(anchor);
+  prize.debugHelpers.push(radius, anchor);
+  updatePrizeDebugHelpers(prize);
+}
+
+function updatePrizeDebugHelpers(prize) {
+  if (!prize.debugHelpers?.length || !prize.body) return;
+  prize.debugHelpers.forEach((helper) => {
+    if (helper.userData.debugRole === "grab-radius") {
+      helper.position.set(prize.body.position.x, prize.body.position.y, prize.body.position.z);
+    } else if (helper.userData.debugRole === "grab-anchor") {
+      helper.position.set(
+        prize.body.position.x + prize.grabOffset.x,
+        prize.body.position.y + prize.grabOffset.y,
+        prize.body.position.z + prize.grabOffset.z,
+      );
+    }
+  });
 }
 
 function resetPositionAudit() {
@@ -732,8 +930,8 @@ function recordPrizePositionWrite(source, prize) {
   positionAudit.maxRelativeDelta = Math.max(positionAudit.maxRelativeDelta, relativeDelta);
 }
 
-function getPositionAuditSnapshot() {
-  const frames = positionAudit.frames.map((frame) => ({
+function formatAuditFrame(frame) {
+  return {
     frame: frame.frame,
     sources: [...frame.sources],
     sourceCount: frame.sources.length,
@@ -747,9 +945,16 @@ function getPositionAuditSnapshot() {
     relativeY: Number(frame.relativeY.toFixed(6)),
     relativeZ: Number(frame.relativeZ.toFixed(6)),
     relativeDelta: Number(frame.relativeDelta.toFixed(6)),
-  }));
+  };
+}
 
-  return {
+function getPositionAuditSnapshot({ includeFrames = false } = {}) {
+  const multiSourceFrames = positionAudit.frames
+    .filter((frame) => frame.sources.length > 1)
+    .slice(0, 12)
+    .map(formatAuditFrame);
+
+  const snapshot = {
     active: positionAudit.active,
     samples: positionAudit.samples,
     minRelativeX: Number((Number.isFinite(positionAudit.minRelativeX) ? positionAudit.minRelativeX : 0).toFixed(6)),
@@ -760,9 +965,14 @@ function getPositionAuditSnapshot() {
     stateSwitches: positionAudit.stateSwitches,
     maxSourcesPerFrame: positionAudit.maxSourcesPerFrame,
     invalidOwnerCount: positionAudit.invalidOwnerCount,
-    multiSourceFrames: frames.filter((frame) => frame.sourceCount > 1),
-    frames,
+    multiSourceFrames,
   };
+
+  if (includeFrames) {
+    snapshot.frames = positionAudit.frames.map(formatAuditFrame);
+  }
+
+  return snapshot;
 }
 
 function resetPrizePhysics(prize, rotate = true) {
@@ -776,13 +986,18 @@ function resetPrizePhysics(prize, rotate = true) {
   prize.body.angularVelocity.set(0, 0, 0);
   prize.body.force.set(0, 0, 0);
   prize.body.torque.set(0, 0, 0);
-  prize.body.quaternion.setFromEuler(0, rotate ? random(-0.35, 0.35) : 0, 0);
+  prize.body.quaternion.setFromEuler(
+    rotate ? prize.spawnTransform?.rotation?.x || 0 : 0,
+    rotate ? prize.spawnTransform?.rotation?.y || 0 : 0,
+    rotate ? prize.spawnTransform?.rotation?.z || 0 : 0,
+  );
   prize.body.wakeUp();
   prize.holdSpin = 0;
   prize.holdOffset = null;
   prize.holdBlend = 0;
   prize.holdQuaternion = null;
-  prize.positionOwner = "physics";
+  prize.positionOwner = "layout";
+  prize.state = "available";
   prize.carryVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
   prize.carryVelocity.set(0, 0, 0);
   prize.carryStartOffset = null;
@@ -794,6 +1009,7 @@ function resetPrizePhysics(prize, rotate = true) {
 
 function capturePrize(prize) {
   prize.grabbed = true;
+  prize.state = "carrying";
   if (!prize.body) return;
 
   clearPrizeGrip(prize);
@@ -917,6 +1133,7 @@ function releaseGrabbedPrize() {
 
   syncHeldPrize(prize, 16);
   prize.grabbed = false;
+  prize.state = "releasing";
   prize.positionOwner = "release-physics";
   if (!prize.body) return;
   const releaseVelocity = prize.carryVelocity || new CANNON.Vec3(0, 0, 0);
@@ -1027,7 +1244,8 @@ function constrainClawAgainstPrizes(dt) {
 
       const dx = target.x - prize.body.position.x;
       const dz = target.z - prize.body.position.z;
-      const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+      const bodyHalf = prize.bodyHalf || PRIZE_BODY_HALF;
+      const prizeTop = prize.body.position.y + bodyHalf.y;
       const topContact = getTopContactDepth(target, prize, dx, dz);
       const sideContact = getSideContactStrength(target, prize, dx, dz);
 
@@ -1059,12 +1277,13 @@ function constrainClawAgainstPrizes(dt) {
 function getTopContactDepth(target, prize, dx, dz) {
   if (!target.role.startsWith("hub") && !target.role.startsWith("tip")) return 0;
 
-  const topBlockX = PRIZE_BODY_HALF.x * 0.55 + target.radius * 0.35;
-  const topBlockZ = PRIZE_BODY_HALF.z * 0.55 + target.radius * 0.35;
+  const bodyHalf = prize.bodyHalf || PRIZE_BODY_HALF;
+  const topBlockX = bodyHalf.x * 0.55 + target.radius * 0.35;
+  const topBlockZ = bodyHalf.z * 0.55 + target.radius * 0.35;
   const normalized = (dx * dx) / (topBlockX * topBlockX) + (dz * dz) / (topBlockZ * topBlockZ);
   if (normalized > 1) return 0;
 
-  const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+  const prizeTop = prize.body.position.y + bodyHalf.y;
   const minTargetY = prizeTop + target.radius + CLAW_CONTACT_SKIN;
   return Math.max(0, minTargetY - target.y);
 }
@@ -1072,13 +1291,14 @@ function getTopContactDepth(target, prize, dx, dz) {
 function getSideContactStrength(target, prize, dx, dz) {
   if (target.role === "hub") return 0;
 
-  const prizeTop = prize.body.position.y + PRIZE_BODY_HALF.y;
+  const bodyHalf = prize.bodyHalf || PRIZE_BODY_HALF;
+  const prizeTop = prize.body.position.y + bodyHalf.y;
   const sideBandTop = prizeTop - CLAW_SIDE_GRIP_Y;
-  const sideBandBottom = prize.body.position.y - PRIZE_BODY_HALF.y * 0.72;
+  const sideBandBottom = prize.body.position.y - bodyHalf.y * 0.72;
   if (target.y > sideBandTop || target.y < sideBandBottom) return 0;
 
-  const sideX = PRIZE_BODY_HALF.x + target.radius * 0.85;
-  const sideZ = PRIZE_BODY_HALF.z + target.radius * 0.85;
+  const sideX = bodyHalf.x + target.radius * 0.85;
+  const sideZ = bodyHalf.z + target.radius * 0.85;
   const normalized = (dx * dx) / (sideX * sideX) + (dz * dz) / (sideZ * sideZ);
   if (normalized > 1) return 0;
   return Math.max(0.18, 1 - Math.sqrt(normalized));
@@ -1392,7 +1612,7 @@ function drawHandOverlay(lm) {
 function readDemoInput(dt) {
   game.demoTime += dt;
   const t = game.demoTime;
-  const target = game.demoTarget || DEMO_TARGET;
+  const target = getLiveDemoTarget();
   const targetX = worldXToInput(target.x);
   const targetY = worldZToInput(target.z);
   input.openPalm = t < 1250;
@@ -1408,6 +1628,10 @@ function readDemoInput(dt) {
   } else {
     input.rawX = targetX;
     input.rawY = targetY;
+    if (t > 3600) {
+      input.x = targetX;
+      input.y = targetY;
+    }
   }
 }
 
@@ -1424,6 +1648,17 @@ function chooseDemoTarget() {
     })
     .sort((a, b) => a.distance - b.distance);
   const prize = candidates[0]?.prize;
+  game.demoTargetPrizeId = prize?.id || null;
+  return getPrizeDemoTarget(prize);
+}
+
+function getLiveDemoTarget() {
+  const prize = sceneObjects.prizes.find((item) => item.id === game.demoTargetPrizeId && !item.collected && item.object.visible);
+  if (!prize) return game.demoTarget || { ...DEMO_TARGET };
+  return getPrizeDemoTarget(prize);
+}
+
+function getPrizeDemoTarget(prize) {
   if (!prize) return { ...DEMO_TARGET };
   const position = prize.body?.position || prize.object.position || prize.home;
   return {
@@ -1476,7 +1711,8 @@ function markPrizeCollected(prize) {
 }
 
 function maybeStartCollectionCelebration() {
-  const allCollected = sceneObjects.prizes.length > 0 && game.collectedPrizeIds.size >= sceneObjects.prizes.length;
+  const allCollected = sceneObjects.prizes.length > 0
+    && sceneObjects.prizes.every((prize) => prize.state === "collected");
   if (!allCollected || game.hasCelebratedCollection) return false;
   game.hasCelebratedCollection = true;
   game.celebrationCount += 1;
@@ -1489,6 +1725,7 @@ async function startCollectionCelebration() {
   game.demoActive = false;
   game.demoTime = 0;
   game.demoTarget = null;
+  game.demoTargetPrizeId = null;
   input.fist = false;
   input.openPalm = false;
   setState(STATES.CELEBRATING);
@@ -1649,6 +1886,7 @@ function resetGame() {
   game.demoActive = false;
   game.demoTime = 0;
   game.demoTarget = null;
+  game.demoTargetPrizeId = null;
   game.round += 1;
   game.sessionActive = false;
   game.sessionElapsedMs = 0;
@@ -1672,12 +1910,7 @@ function resetGame() {
   claw.targetY = WORLD.clawHomeY;
   claw.targetZ = 0;
   claw.closed = 0;
-  sceneObjects.prizes.forEach((prize) => {
-    prize.object.visible = true;
-    prize.grabbed = false;
-    prize.collected = false;
-    resetPrizePhysics(prize);
-  });
+  buildPrizeRound({ resetProgress: true });
   ui.cameraMessage.textContent = game.inputMode === "camera"
     ? "摄像头已启用：张开手掌开始。"
     : "可点击开始演示验证完整流程。";
@@ -1949,6 +2182,7 @@ function updateState(dt) {
       let celebrationStarted = false;
       if (success) {
         game.grabbedPrize.collected = true;
+        game.grabbedPrize.state = "collected";
         game.grabbedPrize.positionOwner = "result";
         game.grabbedPrize.object.visible = false;
         if (game.grabbedPrize.body) game.grabbedPrize.body.collisionResponse = false;
@@ -1961,6 +2195,7 @@ function updateState(dt) {
       game.demoActive = false;
       game.demoTime = 0;
       game.demoTarget = null;
+      game.demoTargetPrizeId = null;
       ui.cameraMessage.textContent = game.inputMode === "camera"
         ? "本次抓取已记录，可继续移动手掌。"
         : "本次抓取已记录，可再次点击开始演示。";
@@ -2007,6 +2242,7 @@ function resetRoundForReplay() {
   game.demoActive = false;
   game.demoTime = 0;
   game.demoTarget = null;
+  game.demoTargetPrizeId = null;
   game.releaseStarted = false;
   game.clawContactMs = 0;
   game.lastCarryMaxRelativeDelta = 0;
@@ -2025,12 +2261,7 @@ function resetRoundForReplay() {
   claw.targetY = WORLD.clawHomeY;
   claw.targetZ = 0;
   claw.closed = 0;
-  sceneObjects.prizes.forEach((prize) => {
-    prize.object.visible = true;
-    prize.grabbed = false;
-    prize.collected = false;
-    resetPrizePhysics(prize);
-  });
+  buildPrizeRound({ resetProgress: true });
 }
 
 function updateClaw(dt) {
@@ -2084,7 +2315,7 @@ function pickPrize() {
     const px = prize.body ? prize.body.position.x : prize.object.position.x;
     const pz = prize.body ? prize.body.position.z : prize.object.position.z;
     const dist = Math.hypot(px - claw.x, pz - claw.z);
-    if (dist < prize.radius + 0.22 && dist < bestDist) {
+    if (dist < (prize.grabRadius || prize.radius) + 0.22 && dist < bestDist) {
       best = prize;
       bestDist = dist;
     }
@@ -2266,7 +2497,9 @@ window.__clawDebug = {
       maybeStartCollectionCelebration();
       return;
     }
+    const resumeAudit = positionAudit.active;
     if (!game.sessionActive || game.state === STATES.IDLE) resetGame();
+    if (resumeAudit) positionAudit.active = true;
     game.demoTarget = chooseDemoTarget();
     game.demoActive = true;
     game.inputMode = game.inputMode === "camera" ? "camera" : "demo";
@@ -2299,10 +2532,27 @@ window.__clawDebug = {
       result: game.result,
       inputMode: game.inputMode,
       round: game.round,
+      roundSeed: game.roundSeed,
+      roundSignature: game.roundSignature,
       attempts: game.attempts.length,
       successes: game.attempts.filter((attempt) => attempt.success).length,
       collectedCount: game.collectedPrizeIds.size,
       visiblePrizeCount: sceneObjects.prizes.filter((prize) => prize.object.visible && !prize.collected).length,
+      uniquePrizeTypes: new Set(sceneObjects.prizes.map((prize) => prize.definitionId)).size,
+      prizeDefinitions: sceneObjects.prizes.map((prize) => ({
+        instanceId: prize.instanceId,
+        definitionId: prize.definitionId,
+        state: prize.state,
+        positionOwner: prize.positionOwner,
+        grabRadius: Number((prize.grabRadius || 0).toFixed(3)),
+        position: prize.body
+          ? {
+              x: Number(prize.body.position.x.toFixed(3)),
+              y: Number(prize.body.position.y.toFixed(3)),
+              z: Number(prize.body.position.z.toFixed(3)),
+            }
+          : null,
+      })),
       celebrationCount: game.celebrationCount,
       hasCelebratedCollection: game.hasCelebratedCollection,
       celebrationVisible: ui.celebrationOverlay.classList.contains("is-visible"),
@@ -2337,11 +2587,19 @@ window.__clawDebug = {
     positionAudit.active = true;
   },
   stopPositionAudit() {
+    const summary = {
+      active: positionAudit.active,
+      samples: positionAudit.samples,
+      maxSourcesPerFrame: positionAudit.maxSourcesPerFrame,
+    };
     positionAudit.active = false;
-    return getPositionAuditSnapshot();
+    return summary;
   },
   getPositionAudit() {
     return getPositionAuditSnapshot();
+  },
+  getPositionAuditFrames() {
+    return getPositionAuditSnapshot({ includeFrames: true });
   },
   probeClawCollision() {
     resetRoundForReplay();
@@ -2396,6 +2654,7 @@ window.__clawDebug = {
     sceneObjects.prizes.forEach((prize) => {
       prize.collected = true;
       prize.grabbed = false;
+      prize.state = "collected";
       prize.positionOwner = "result";
       prize.object.visible = false;
       if (prize.body) prize.body.collisionResponse = false;
@@ -2412,6 +2671,9 @@ window.__clawDebug = {
     }
     celebrationLoadedSource = "";
     ui.celebrationPlayer.replaceChildren();
+  },
+  previewPrizeRound(seed) {
+    return createPrizeRound({ seed: normalizeSeed(seed) });
   },
 };
 

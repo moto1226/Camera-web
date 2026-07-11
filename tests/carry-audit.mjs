@@ -5,8 +5,8 @@ const CARRY_SAMPLE_FRAMES = 120;
 const MAX_RELATIVE_DELTA = 0.001;
 const DEMO_STEP_MS = 16;
 
-const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+let browser = await chromium.launch({ headless: true });
+let page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 
 function assertCarryAudit(audit, label) {
   if (audit.samples < CARRY_SAMPLE_FRAMES) {
@@ -56,15 +56,22 @@ try {
 
   await page.evaluate(() => window.__clawDebug.reset());
   const audit = await page.evaluate((targetSamples) => {
-    window.__clawDebug.startPositionAudit();
     window.__clawDebug.startDemo();
+    window.__clawDebug.startPositionAudit();
     for (let i = 0; i < 1800; i += 1) {
       window.__clawDebug.advance(16, 16);
       if (window.__clawDebug.getPositionAudit().samples >= targetSamples) break;
     }
-    return window.__clawDebug.stopPositionAudit();
+    const audit = window.__clawDebug.getPositionAudit();
+    return audit;
   }, CARRY_SAMPLE_FRAMES);
   assertCarryAudit(audit, "120-frame carry audit");
+
+  await browser.close();
+  browser = await chromium.launch({ headless: true });
+  page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.waitForFunction(() => window.__clawDebug);
 
   const tenRuns = [];
   for (let i = 0; i < 10; i += 1) {

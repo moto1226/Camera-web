@@ -1,16 +1,13 @@
 # Asset Sources
 
-This prototype does not use downloaded image, audio, or sprite assets.
-
-- Claw machine, claw, toys, glass, and UI details are generated with Canvas 2D and CSS in this repository.
+- This prototype uses selected CC0 3D GLB assets recorded in `THIRD_PARTY_ASSETS.md`.
+- Claw machine cabinet, glass, lighting, UI details, and fallback toys are generated with Three.js/CSS in this repository.
 - MediaPipe WASM runtime files are copied from the npm package `@mediapipe/tasks-vision`.
 - `models/hand_landmarker.task` is the official MediaPipe Hand Landmarker float16 model downloaded from `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`.
 
-If external toy or claw artwork is added later, use CC0, Public Domain, MIT, or another license that explicitly allows redistribution, and record the source URL and license here.
-
 ## 3D Prototype Asset Candidates
 
-Selected for the future Three.js version. These files are copied into `models/3d/`.
+Selected for the Three.js version. These files are copied into `models/3d/`.
 
 ### Kenney Cube Pets
 
@@ -24,6 +21,12 @@ Selected for the future Three.js version. These files are copied into `models/3d
   - `models/3d/prizes/animal-panda.glb`
   - `models/3d/prizes/animal-penguin.glb`
   - `models/3d/prizes/animal-tiger.glb`
+  - `models/3d/prizes/animal-fox.glb`
+  - `models/3d/prizes/animal-koala.glb`
+  - `models/3d/prizes/animal-lion.glb`
+  - `models/3d/prizes/animal-monkey.glb`
+  - `models/3d/prizes/animal-bee.glb`
+  - `models/3d/prizes/animal-crab.glb`
   - `models/3d/prizes/Textures/colormap.png`
 
 ### Kenney Factory Kit
@@ -40,6 +43,8 @@ Selected for the future Three.js version. These files are copied into `models/3d
   - `models/3d/claw-machine/cog-b.glb`
   - `models/3d/claw-machine/machine-window.glb`
   - `models/3d/claw-machine/conveyor-long.glb`
+  - `models/3d/prizes/gift-box-small.glb`
+  - `models/3d/prizes/gift-box-wide.glb`
 
 ### Optional Claw Reference
 

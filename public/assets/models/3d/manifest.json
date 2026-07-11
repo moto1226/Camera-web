@@ -41,6 +41,62 @@
       "path": "/assets/models/3d/prizes/animal-tiger.glb",
       "source": "Kenney Cube Pets",
       "license": "CC0"
+    },
+    {
+      "id": "fox",
+      "label": "Fox",
+      "path": "/assets/models/3d/prizes/animal-fox.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "koala",
+      "label": "Koala",
+      "path": "/assets/models/3d/prizes/animal-koala.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "lion",
+      "label": "Lion",
+      "path": "/assets/models/3d/prizes/animal-lion.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "monkey",
+      "label": "Monkey",
+      "path": "/assets/models/3d/prizes/animal-monkey.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "bee",
+      "label": "Bee",
+      "path": "/assets/models/3d/prizes/animal-bee.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "crab",
+      "label": "Crab",
+      "path": "/assets/models/3d/prizes/animal-crab.glb",
+      "source": "Kenney Cube Pets",
+      "license": "CC0"
+    },
+    {
+      "id": "gift-box-small",
+      "label": "Gift box small",
+      "path": "/assets/models/3d/prizes/gift-box-small.glb",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
+    },
+    {
+      "id": "gift-box-wide",
+      "label": "Gift box wide",
+      "path": "/assets/models/3d/prizes/gift-box-wide.glb",
+      "source": "Kenney Factory Kit",
+      "license": "CC0"
     }
   ],
   "clawMachineParts": [
