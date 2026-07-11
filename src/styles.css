@@ -203,47 +203,6 @@ h1 {
   opacity: 0.09;
 }
 
-.target-reticle {
-  pointer-events: none;
-  position: absolute;
-  left: 50%;
-  top: 58%;
-  width: 42px;
-  height: 42px;
-  border: 1px solid rgba(91, 246, 207, 0.7);
-  border-radius: 999px;
-  transform: translate(-50%, -50%);
-  opacity: 0;
-  transition:
-    transform 160ms ease,
-    opacity 180ms ease;
-}
-
-.target-reticle::before,
-.target-reticle::after {
-  content: "";
-  position: absolute;
-  background: rgba(91, 246, 207, 0.72);
-}
-
-.target-reticle::before {
-  left: 50%;
-  top: -8px;
-  width: 1px;
-  height: 56px;
-}
-
-.target-reticle::after {
-  left: -8px;
-  top: 50%;
-  width: 56px;
-  height: 1px;
-}
-
-.target-reticle.is-visible {
-  opacity: 0.75;
-}
-
 .camera-card {
   position: absolute;
   right: clamp(14px, 2vw, 28px);

@@ -27,7 +27,6 @@ const ui = {
   resultText: document.getElementById("result-text"),
   resultAction: document.getElementById("result-action-button"),
   currentInstruction: document.getElementById("current-instruction"),
-  targetReticle: document.getElementById("target-reticle"),
   cameraCard: document.getElementById("camera-card"),
   cameraMessage: document.getElementById("camera-message"),
   cameraStatusDot: document.getElementById("camera-status-dot"),
@@ -2184,13 +2183,6 @@ function updatePresentationUi() {
     item.classList.toggle("is-active", item.dataset.step === step);
     item.classList.toggle("is-done", activeIndex > index);
   });
-
-  const reticleVisible = [STATES.CONTROLLING, STATES.DROPPING, STATES.GRABBING].includes(game.state);
-  const reticleX = 10 + input.x * 80;
-  const reticleY = 24 + input.y * 56;
-  ui.targetReticle.classList.toggle("is-visible", reticleVisible);
-  ui.targetReticle.style.left = `${reticleX}%`;
-  ui.targetReticle.style.top = `${reticleY}%`;
 
   const latest = game.attempts.at(-1);
   const showResult = game.resultFlashMs > 0 && latest;
